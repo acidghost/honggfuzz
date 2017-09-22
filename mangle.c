@@ -533,6 +533,34 @@ static void mangle_InsertRnd(honggfuzz_t * hfuzz UNUSED, fuzzer_t * fuzzer)
     util_rndBuf(&fuzzer->dynamicFile[off], len);
 }
 
+static void (*const mangleFuncs[]) (honggfuzz_t * hfuzz, fuzzer_t * fuzzer) = {
+/*  *INDENT-OFF* */
+    mangle_Byte,
+    mangle_Bit,
+    mangle_Bytes,
+    mangle_Magic,
+    mangle_IncByte,
+    mangle_DecByte,
+    mangle_NegByte,
+    mangle_AddSub,
+    mangle_Dictionary,
+    mangle_DictionaryInsert,
+    mangle_MemMove,
+    mangle_MemSet,
+    mangle_Random,
+    mangle_CloneByte,
+    mangle_Expand,
+    mangle_Shrink,
+    mangle_InsertRnd,
+    mangle_Resize,
+/* *INDENT-ON* */
+};
+
+size_t mangle_mangleFuncsN(void)
+{
+    return ARRAYSIZE(mangleFuncs);
+}
+
 void mangle_mangleContent(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
 {
     if (fuzzer->flipRate == 0.0f) {
@@ -549,29 +577,6 @@ void mangle_mangleContent(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
     if ((util_rnd64() % 5) == 0) {
         mangle_Resize(hfuzz, fuzzer);
     }
-
-    static void (*const mangleFuncs[]) (honggfuzz_t * hfuzz, fuzzer_t * fuzzer) = {
-    /*  *INDENT-OFF* */
-        mangle_Byte,
-        mangle_Bit,
-        mangle_Bytes,
-        mangle_Magic,
-        mangle_IncByte,
-        mangle_DecByte,
-        mangle_NegByte,
-        mangle_AddSub,
-        mangle_Dictionary,
-        mangle_DictionaryInsert,
-        mangle_MemMove,
-        mangle_MemSet,
-        mangle_Random,
-        mangle_CloneByte,
-        mangle_Expand,
-        mangle_Shrink,
-        mangle_InsertRnd,
-        mangle_Resize,
-    /* *INDENT-ON* */
-    };
 
     /* Max number of stacked changes is 6 */
     uint64_t changesCnt = util_rndGet(1, 6);

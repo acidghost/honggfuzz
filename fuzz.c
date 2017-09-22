@@ -79,6 +79,7 @@ static bool fuzz_prepareFileDynamically(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
         if (hfuzz->dynfileqCurrent == NULL
             || hfuzz->dynfileqCurrent == TAILQ_LAST(&hfuzz->dynfileq, dictq_t)) {
             hfuzz->dynfileqCurrent = TAILQ_FIRST(&hfuzz->dynfileq);
+            hfuzz->dynfileqRun++;
         }
         dynfile = hfuzz->dynfileqCurrent;
         hfuzz->dynfileqCurrent = TAILQ_NEXT(hfuzz->dynfileqCurrent, pointers);
@@ -600,6 +601,72 @@ static void fuzz_fuzzLoop(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
     report_Report(hfuzz, fuzzer->report);
 }
 
+static int fuzz_filterInject(const struct dirent *d)
+{
+    return strstr(d->d_name, "id:") == NULL ? 0 : -1;
+}
+
+static bool fuzz_injectFiles(honggfuzz_t * hfuzz, fuzzer_t * fuzzer UNUSED)
+{
+    struct dirent **namelist;
+    int nfiles = scandir(hfuzz->injectDir, &namelist, fuzz_filterInject, alphasort);
+
+    if (nfiles < 0) {
+        PLOG_W("scandir('%s', &namelist, fuzz_filterInject, alphasort)", hfuzz->injectDir);
+        return false;
+    }
+
+    MX_SCOPED_LOCK(&hfuzz->dynfileq_mutex);
+
+    ssize_t maxInjectLast = hfuzz->injectLast;
+    for (size_t i = 0; i < (size_t) nfiles; i++) {
+        struct dirent *file_d = namelist[i];
+        size_t file_id = 0;
+        if (sscanf(file_d->d_name, "id:%zu", &file_id) != 1) {
+            LOG_W("failed to parse file id from %s", file_d->d_name);
+            free(file_d);
+            continue;
+        }
+
+        if (hfuzz->injectLast >= 0 && file_id <= (size_t) hfuzz->injectLast) {
+            free(file_d);
+            continue;
+        }
+
+        char fname[PATH_MAX];
+        snprintf(fname, PATH_MAX - 1, "%s/%s", hfuzz->injectDir, file_d->d_name);
+        free(file_d);
+
+        struct stat st;
+        if (stat(fname, &st) == -1) {
+            PLOG_W("stat('%s', &st)", fname);
+            continue;
+        }
+
+        struct dynfile_t *dynfile = (struct dynfile_t *)util_Malloc(sizeof(struct dynfile_t));
+        dynfile->size = st.st_size;
+        dynfile->data = (uint8_t *) util_Malloc(st.st_size);
+        if (files_readFileToBufMax(fname, dynfile->data, st.st_size) == -1) {
+            LOG_W("files_readFileToBufMax('%s', %p, %zu)", fname, dynfile->data, st.st_size);
+            free(dynfile->data);
+            free(dynfile);
+            continue;
+        }
+
+        TAILQ_INSERT_HEAD(&hfuzz->dynfileq, dynfile, pointers);
+        hfuzz->dynfileqCnt++;
+
+        if (maxInjectLast < 0 || file_id > (size_t) maxInjectLast) {
+            maxInjectLast = file_id;
+        }
+    }
+
+    free(namelist);
+    ATOMIC_SET(hfuzz->injectLast, maxInjectLast);
+
+    return true;
+}
+
 static void *fuzz_threadNew(void *arg)
 {
     honggfuzz_t *hfuzz = (honggfuzz_t *) arg;
@@ -626,6 +693,9 @@ static void *fuzz_threadNew(void *arg)
         LOG_F("Could not initialize the thread");
     }
 
+    size_t mangleFuncsN = mangle_mangleFuncsN();
+    size_t syncInjectedTh = mangleFuncsN * _HF_SYNC_EVERY;
+
     for (;;) {
         /* Check if dry run mode with verifier enabled */
         if (hfuzz->origFlipRate == 0.0L && hfuzz->useVerifier) {
@@ -639,6 +709,15 @@ static void *fuzz_threadNew(void *arg)
                  && hfuzz->mutationsMax) {
             ATOMIC_POST_INC(hfuzz->threadsFinished);
             break;
+        }
+
+        /* Scan inject folder for unseen inputs */
+        if (hfuzz->injectDir != NULL &&
+            (ATOMIC_GET(hfuzz->dynfileqRun) % syncInjectedTh) == 0)
+        {
+            if (!fuzz_injectFiles(hfuzz, &fuzzer)) {
+                LOG_W("failed to inject files");
+            }
         }
 
         fuzz_fuzzLoop(hfuzz, &fuzzer);

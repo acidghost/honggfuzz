@@ -143,6 +143,8 @@ bool cmdlineParse(int argc, char *argv[], honggfuzz_t * hfuzz)
         .cmdline_txt[0] = '\0',
         .inputDir = NULL,
         .inputDirP = NULL,
+        .injectDir = NULL,
+        .injectLast = -1,
         .fileCnt = 0,
         .fileCntDone = false,
         .nullifyStdio = true,
@@ -197,6 +199,7 @@ bool cmdlineParse(int argc, char *argv[], honggfuzz_t * hfuzz)
         .dynfileq_mutex = PTHREAD_MUTEX_INITIALIZER,
         .dynfileqCnt = 0U,
         .dynfileqCurrent = NULL,
+        .dynfileqRun = 0,
 
         .feedback_mutex = PTHREAD_MUTEX_INITIALIZER,
 
@@ -266,6 +269,7 @@ bool cmdlineParse(int argc, char *argv[], honggfuzz_t * hfuzz)
     struct custom_option custom_opts[] = {
         {{"help", no_argument, NULL, 'h'}, "Help plz.."},
         {{"input", required_argument, NULL, 'f'}, "Path to a directory containing initial file corpus"},
+        {{"inject", required_argument, NULL, 'j'}, "Path to a directory containing files to inject"},
         {{"persistent", no_argument, NULL, 'P'}, "Enable persistent fuzzing (use hfuzz_cc/hfuzz-clang to compile code)"},
         {{"instrument", no_argument, NULL, 'z'}, "Enable compile-time instrumentation (use hfuzz_cc/hfuzz-clang to compile code)"},
         {{"sancov", no_argument, NULL, 'C'}, "Enable sanitizer coverage feedback"},
@@ -329,7 +333,7 @@ bool cmdlineParse(int argc, char *argv[], honggfuzz_t * hfuzz)
     const char *logfile = NULL;
     int opt_index = 0;
     for (;;) {
-        int c = getopt_long(argc, argv, "-?hQvVsuPf:d:e:W:r:c:F:t:R:n:N:l:p:g:E:w:B:CzTS", opts,
+        int c = getopt_long(argc, argv, "-?hQvVsuPf:d:e:W:r:c:F:t:R:n:N:l:p:g:E:w:B:CzTSj:", opts,
                             &opt_index);
         if (c < 0)
             break;
@@ -341,6 +345,9 @@ bool cmdlineParse(int argc, char *argv[], honggfuzz_t * hfuzz)
             break;
         case 'f':
             hfuzz->inputDir = optarg;
+            break;
+        case 'j':
+            hfuzz->injectDir = optarg;
             break;
         case 'Q':
             hfuzz->nullifyStdio = false;

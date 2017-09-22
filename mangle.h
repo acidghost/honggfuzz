@@ -27,5 +27,6 @@
 #include <stdint.h>
 
 extern void mangle_mangleContent(honggfuzz_t * hfuzz, fuzzer_t * fuzzer);
+extern size_t mangle_mangleFuncsN(void);
 
 #endif

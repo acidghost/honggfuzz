@@ -97,6 +97,9 @@ static void __attribute__ ((unused)) __clang_cleanup_func(void (^*dfunc) (void))
 /* FD used to pass data to a persistent process */
 #define _HF_PERSISTENT_FD 1023
 
+/* Minimum number of cycles through the dynamic queue before syncing injected */
+#define _HF_SYNC_EVERY 100
+
 typedef enum {
     _HF_DYNFILE_NONE = 0x0,
     _HF_DYNFILE_INSTR_COUNT = 0x1,
@@ -200,6 +203,8 @@ typedef struct {
     char cmdline_txt[61];
     char *inputDir;
     DIR *inputDirP;
+    char *injectDir;
+    ssize_t injectLast;
     size_t fileCnt;
     bool fileCntDone;
     bool nullifyStdio;
@@ -250,6 +255,7 @@ typedef struct {
     pthread_mutex_t dynfileq_mutex;
      TAILQ_HEAD(dictq_t, dynfile_t) dynfileq;
     struct dynfile_t *dynfileqCurrent;
+    size_t dynfileqRun;
 
     pthread_mutex_t feedback_mutex;
 

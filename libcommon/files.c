@@ -309,6 +309,13 @@ bool files_init(honggfuzz_t * hfuzz)
         return false;
     }
 
+    if (hfuzz->injectDir != NULL) {
+        if (access(hfuzz->injectDir, W_OK) != 0) {
+            PLOG_W("access('%s', W_OK)", hfuzz->injectDir);
+            return false;
+        }
+    }
+
     return true;
 }
 
