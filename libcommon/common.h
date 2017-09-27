@@ -30,6 +30,7 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <sys/param.h>
 #include <sys/queue.h>
 #include <sys/types.h>
@@ -99,6 +100,9 @@ static void __attribute__ ((unused)) __clang_cleanup_func(void (^*dfunc) (void))
 
 /* Minimum number of cycles through the dynamic queue before syncing injected */
 #define _HF_SYNC_EVERY 100
+
+/* Minimum number of mutations before writing stats again */
+#define _HF_LOG_STATS_EVERY 5000
 
 typedef enum {
     _HF_DYNFILE_NONE = 0x0,
@@ -205,6 +209,7 @@ typedef struct {
     DIR *inputDirP;
     char *injectDir;
     ssize_t injectLast;
+    char *statsDir;
     size_t fileCnt;
     bool fileCntDone;
     bool nullifyStdio;
@@ -300,10 +305,17 @@ typedef struct {
 } honggfuzz_t;
 
 typedef struct {
+    size_t executedInputs;
+} fuzzStats_t;
+
+typedef struct {
     pid_t pid;
     pid_t persistentPid;
     fuzzState_t state;
     int64_t timeStartedMillis;
+    const char *statsFileName;
+    FILE *statsFile;
+    fuzzStats_t *stats;
     const char *origFileName;
     char fileName[PATH_MAX];
     char crashFileName[PATH_MAX];

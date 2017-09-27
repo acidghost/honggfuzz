@@ -145,6 +145,7 @@ bool cmdlineParse(int argc, char *argv[], honggfuzz_t * hfuzz)
         .inputDirP = NULL,
         .injectDir = NULL,
         .injectLast = -1,
+        .statsDir = NULL,
         .fileCnt = 0,
         .fileCntDone = false,
         .nullifyStdio = true,
@@ -270,6 +271,7 @@ bool cmdlineParse(int argc, char *argv[], honggfuzz_t * hfuzz)
         {{"help", no_argument, NULL, 'h'}, "Help plz.."},
         {{"input", required_argument, NULL, 'f'}, "Path to a directory containing initial file corpus"},
         {{"inject", required_argument, NULL, 'j'}, "Path to a directory containing files to inject"},
+        {{"stats_dir", required_argument, NULL, 'o'}, "Where to save some statistics"},
         {{"persistent", no_argument, NULL, 'P'}, "Enable persistent fuzzing (use hfuzz_cc/hfuzz-clang to compile code)"},
         {{"instrument", no_argument, NULL, 'z'}, "Enable compile-time instrumentation (use hfuzz_cc/hfuzz-clang to compile code)"},
         {{"sancov", no_argument, NULL, 'C'}, "Enable sanitizer coverage feedback"},
@@ -333,7 +335,7 @@ bool cmdlineParse(int argc, char *argv[], honggfuzz_t * hfuzz)
     const char *logfile = NULL;
     int opt_index = 0;
     for (;;) {
-        int c = getopt_long(argc, argv, "-?hQvVsuPf:d:e:W:r:c:F:t:R:n:N:l:p:g:E:w:B:CzTSj:", opts,
+        int c = getopt_long(argc, argv, "-?hQvVsuPf:d:e:W:r:c:F:t:R:n:N:l:p:g:E:w:B:CzTSj:o:", opts,
                             &opt_index);
         if (c < 0)
             break;
@@ -348,6 +350,9 @@ bool cmdlineParse(int argc, char *argv[], honggfuzz_t * hfuzz)
             break;
         case 'j':
             hfuzz->injectDir = optarg;
+            break;
+        case 'o':
+            hfuzz->statsDir = optarg;
             break;
         case 'Q':
             hfuzz->nullifyStdio = false;

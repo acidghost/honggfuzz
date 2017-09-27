@@ -581,6 +581,8 @@ static void fuzz_fuzzLoop(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
         LOG_F("subproc_Run()");
     }
 
+    fuzzer->stats->executedInputs++;
+
     if (hfuzz->persistent == false) {
         unlink(fuzzer->fileName);
     }
@@ -667,15 +669,50 @@ static bool fuzz_injectFiles(honggfuzz_t * hfuzz, fuzzer_t * fuzzer UNUSED)
     return true;
 }
 
+static bool fuzz_logStats(honggfuzz_t * hfuzz UNUSED, fuzzer_t * fuzzer)
+{
+    /* Re-open file so we can overwrite it */
+    fuzzer->statsFile = freopen(NULL, "w", fuzzer->statsFile);
+    if (fuzzer->statsFile == NULL) {
+        PLOG_W("failed to reopen %s", fuzzer->statsFileName);
+        return false;
+    }
+
+    fuzzStats_t *stats = fuzzer->stats;
+    fprintf(fuzzer->statsFile, "executedInputs: %zu\n",
+        stats->executedInputs);
+
+    return true;
+}
+
 static void *fuzz_threadNew(void *arg)
 {
     honggfuzz_t *hfuzz = (honggfuzz_t *) arg;
     unsigned int fuzzNo = ATOMIC_POST_INC(hfuzz->threadsActiveCnt);
     LOG_I("Launched new fuzzing thread, no. #%" PRId32, fuzzNo);
 
+    FILE *statsFile = NULL;
+    char statsFileName[PATH_MAX];
+    fuzzStats_t stats = {
+        .executedInputs = 0
+    };
+    bool useStatsFile = hfuzz->statsDir != NULL;
+    if (useStatsFile) {
+        snprintf(statsFileName, PATH_MAX - 1, "%s/stats.%d",
+            hfuzz->statsDir, fuzzNo);
+
+        statsFile = fopen(statsFileName, "w");
+        if (statsFile == NULL) {
+            PLOG_F("failed to open %s", statsFileName);
+        }
+    }
+
     fuzzer_t fuzzer = {
         .pid = 0,
         .persistentPid = 0,
+        .statsFileName = useStatsFile ? statsFileName : NULL,
+        .statsFile = useStatsFile ? statsFile : NULL,
+        .stats = &stats,
         .dynamicFile = util_Calloc(hfuzz->maxFileSz),
         .fuzzNo = fuzzNo,
         .persistentSock = -1,
@@ -695,6 +732,7 @@ static void *fuzz_threadNew(void *arg)
 
     size_t mangleFuncsN = mangle_mangleFuncsN();
     size_t syncInjectedTh = mangleFuncsN * _HF_SYNC_EVERY;
+    // size_t logStatsTh = mangleFuncsN * _HF_LOG_STATS_EVERY;
 
     for (;;) {
         /* Check if dry run mode with verifier enabled */
@@ -722,6 +760,17 @@ static void *fuzz_threadNew(void *arg)
 
         fuzz_fuzzLoop(hfuzz, &fuzzer);
 
+        /* Log stats to file */
+        if (fuzzer.statsFile != NULL &&
+            (ATOMIC_GET(hfuzz->mutationsCnt) % _HF_LOG_STATS_EVERY) == 0)
+        {
+            if (!fuzz_logStats(hfuzz, &fuzzer)) {
+                LOG_W("failed to log stats");
+            } else {
+                LOG_I("stats logged to file #%d", fuzzNo);
+            }
+        }
+
         if (ATOMIC_GET(hfuzz->terminating) == true) {
             break;
         }
@@ -732,6 +781,13 @@ static void *fuzz_threadNew(void *arg)
             break;
         }
 
+    }
+
+    if (fuzzer.statsFile != NULL) {
+        if (!fuzz_logStats(hfuzz, &fuzzer)) {
+            LOG_W("failed to log stats");
+        }
+        fclose(fuzzer.statsFile);
     }
 
     LOG_I("Terminating thread no. #%" PRId32, fuzzNo);
