@@ -21,16 +21,15 @@
  *
  */
 
-#include "../libcommon/common.h"
-#include "../arch.h"
+#include "arch.h"
 
-#include <poll.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/cdefs.h>
 #include <sys/resource.h>
@@ -41,19 +40,19 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "../libcommon/files.h"
-#include "../libcommon/log.h"
-#include "../libcommon/util.h"
-#include "../sancov.h"
-#include "../subproc.h"
+#include "libcommon/common.h"
+#include "libcommon/files.h"
+#include "libcommon/log.h"
+#include "libcommon/util.h"
+#include "sancov.h"
+#include "subproc.h"
 
-/*  *INDENT-OFF* */
 struct {
     bool important;
-    const char *descr;
+    const char* descr;
 } arch_sigs[NSIG] = {
-    [0 ... (NSIG - 1)].important = false,
-    [0 ... (NSIG - 1)].descr = "UNKNOWN",
+    [0 ...(NSIG - 1)].important = false,
+    [0 ...(NSIG - 1)].descr = "UNKNOWN",
 
     [SIGILL].important = true,
     [SIGILL].descr = "SIGILL",
@@ -75,13 +74,12 @@ struct {
     [SIGVTALRM].important = false,
     [SIGVTALRM].descr = "SIGVTALRM-TMOUT",
 };
-/*  *INDENT-ON* */
 
 /*
  * Returns true if a process exited (so, presumably, we can delete an input
  * file)
  */
-static bool arch_analyzeSignal(honggfuzz_t * hfuzz, int status, fuzzer_t * fuzzer)
+static bool arch_analyzeSignal(honggfuzz_t* hfuzz, int status, fuzzer_t* fuzzer)
 {
     /*
      * Resumed by delivery of SIGCONT
@@ -107,7 +105,7 @@ static bool arch_analyzeSignal(honggfuzz_t * hfuzz, int status, fuzzer_t * fuzze
      */
     if (!WIFSIGNALED(status)) {
         LOG_E("Process (pid %d) exited with the following status %d, please report that as a bug",
-              fuzzer->pid, status);
+            fuzzer->pid, status);
         return true;
     }
 
@@ -127,9 +125,8 @@ static bool arch_analyzeSignal(honggfuzz_t * hfuzz, int status, fuzzer_t * fuzze
     if (hfuzz->origFlipRate == 0.0L && hfuzz->useVerifier) {
         snprintf(newname, sizeof(newname), "%s", fuzzer->origFileName);
     } else {
-        snprintf(newname, sizeof(newname), "%s/%s.PID.%d.TIME.%s.%s",
-                 hfuzz->workDir, arch_sigs[termsig].descr, fuzzer->pid, localtmstr,
-                 hfuzz->fileExtn);
+        snprintf(newname, sizeof(newname), "%s/%s.PID.%d.TIME.%s.%s", hfuzz->workDir,
+            arch_sigs[termsig].descr, fuzzer->pid, localtmstr, hfuzz->fileExtn);
     }
 
     LOG_I("Ok, that's interesting, saving the '%s' as '%s'", fuzzer->fileName, newname);
@@ -140,24 +137,21 @@ static bool arch_analyzeSignal(honggfuzz_t * hfuzz, int status, fuzzer_t * fuzze
     ATOMIC_POST_INC(hfuzz->crashesCnt);
     ATOMIC_POST_INC(hfuzz->uniqueCrashesCnt);
 
-    if (files_writeBufToFile
-        (newname, fuzzer->dynamicFile, fuzzer->dynamicFileSz,
-         O_CREAT | O_EXCL | O_WRONLY) == false) {
+    if (files_writeBufToFile(
+            newname, fuzzer->dynamicFile, fuzzer->dynamicFileSz, O_CREAT | O_EXCL | O_WRONLY)
+        == false) {
         LOG_E("Couldn't copy '%s' to '%s'", fuzzer->fileName, fuzzer->crashFileName);
     }
 
     return true;
 }
 
-pid_t arch_fork(honggfuzz_t * hfuzz UNUSED, fuzzer_t * fuzzer UNUSED)
-{
-    return fork();
-}
+pid_t arch_fork(honggfuzz_t* hfuzz UNUSED, fuzzer_t* fuzzer UNUSED) { return fork(); }
 
-bool arch_launchChild(honggfuzz_t * hfuzz, char *fileName)
+bool arch_launchChild(honggfuzz_t* hfuzz, char* fileName)
 {
 #define ARGS_MAX 512
-    char *args[ARGS_MAX + 2];
+    char* args[ARGS_MAX + 2];
     char argData[PATH_MAX] = { 0 };
     int x;
 
@@ -165,9 +159,9 @@ bool arch_launchChild(honggfuzz_t * hfuzz, char *fileName)
         if (!hfuzz->fuzzStdin && strcmp(hfuzz->cmdline[x], _HF_FILE_PLACEHOLDER) == 0) {
             args[x] = fileName;
         } else if (!hfuzz->fuzzStdin && strstr(hfuzz->cmdline[x], _HF_FILE_PLACEHOLDER)) {
-            const char *off = strstr(hfuzz->cmdline[x], _HF_FILE_PLACEHOLDER);
+            const char* off = strstr(hfuzz->cmdline[x], _HF_FILE_PLACEHOLDER);
             snprintf(argData, PATH_MAX, "%.*s%s", (int)(off - hfuzz->cmdline[x]), hfuzz->cmdline[x],
-                     fileName);
+                fileName);
             args[x] = argData;
         } else {
             args[x] = hfuzz->cmdline[x];
@@ -186,15 +180,11 @@ bool arch_launchChild(honggfuzz_t * hfuzz, char *fileName)
     return false;
 }
 
-void arch_prepareParent(honggfuzz_t * hfuzz UNUSED, fuzzer_t * fuzzer UNUSED)
-{
-}
+void arch_prepareParent(honggfuzz_t* hfuzz UNUSED, fuzzer_t* fuzzer UNUSED) {}
 
-void arch_prepareParentAfterFork(honggfuzz_t * hfuzz UNUSED, fuzzer_t * fuzzer UNUSED)
-{
-}
+void arch_prepareParentAfterFork(honggfuzz_t* hfuzz UNUSED, fuzzer_t* fuzzer UNUSED) {}
 
-void arch_reapChild(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
+void arch_reapChild(honggfuzz_t* hfuzz, fuzzer_t* fuzzer)
 {
     for (;;) {
         if (hfuzz->persistent) {
@@ -202,7 +192,7 @@ void arch_reapChild(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
                 .fd = fuzzer->persistentSock,
                 .events = POLLIN,
             };
-            int r = poll(&pfd, 1, 250 /* 0.25s */ );
+            int r = poll(&pfd, 1, 250 /* 0.25s */);
             if (r == 0 || (r == -1 && errno == EINTR)) {
                 subproc_checkTimeLimit(hfuzz, fuzzer);
                 subproc_checkTermination(hfuzz, fuzzer);
@@ -239,12 +229,12 @@ void arch_reapChild(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
             fuzzer->persistentPid = 0;
             if (ATOMIC_GET(hfuzz->terminating) == false) {
                 LOG_W("Persistent mode: PID %d exited with status: %s", ret,
-                      subproc_StatusToStr(status, strStatus, sizeof(strStatus)));
+                    subproc_StatusToStr(status, strStatus, sizeof(strStatus)));
             }
         }
 
         LOG_D("Process (pid %d) came back with status: %s", fuzzer->pid,
-              subproc_StatusToStr(status, strStatus, sizeof(strStatus)));
+            subproc_StatusToStr(status, strStatus, sizeof(strStatus)));
 
         if (arch_analyzeSignal(hfuzz, status, fuzzer)) {
             break;
@@ -252,7 +242,7 @@ void arch_reapChild(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
     }
 }
 
-bool arch_archInit(honggfuzz_t * hfuzz)
+bool arch_archInit(honggfuzz_t* hfuzz)
 {
     /* Default is true for all platforms except Android */
     arch_sigs[SIGABRT].important = hfuzz->monitorSIGABRT;
@@ -263,12 +253,6 @@ bool arch_archInit(honggfuzz_t * hfuzz)
     return true;
 }
 
-void arch_sigFunc(int sig UNUSED)
-{
-    return;
-}
+void arch_sigFunc(int sig UNUSED) { return; }
 
-bool arch_archThreadInit(honggfuzz_t * hfuzz UNUSED, fuzzer_t * fuzzer UNUSED)
-{
-    return true;
-}
+bool arch_archThreadInit(honggfuzz_t* hfuzz UNUSED, fuzzer_t* fuzzer UNUSED) { return true; }

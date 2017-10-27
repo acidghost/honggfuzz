@@ -1,5 +1,3 @@
-#include "../libcommon/common.h"
-
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -14,19 +12,20 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "../libcommon/files.h"
-#include "../libcommon/log.h"
-#include "../libcommon/util.h"
+#include "libcommon/common.h"
+#include "libcommon/files.h"
+#include "libcommon/log.h"
+#include "libcommon/util.h"
 
 #define ARGS_MAX 4096
 #define __XSTR(x) #x
 #define _XSTR(x) __XSTR(x)
-#define LHFUZZ_A_PATH "/tmp/libhfuzz.a"
+
+static char lhfuzzPath[PATH_MAX] = { 0 };
 
 static bool isCXX = false;
 static bool isGCC = false;
 
-    /*  *INDENT-OFF* */
 /* Embed libhfuzz.a inside this binary */
 __asm__("\n"
         "   .global lhfuzz_start\n"
@@ -34,8 +33,7 @@ __asm__("\n"
         "lhfuzz_start:\n"
         "   .incbin \"libhfuzz/libhfuzz.a\"\n"
         "lhfuzz_end:\n"
-		"\n");
-    /*  *INDENT-ON* */
+        "\n");
 
 static bool useASAN()
 {
@@ -61,7 +59,7 @@ static bool useUBSAN()
     return false;
 }
 
-static bool isLDMode(int argc, char **argv)
+static bool isLDMode(int argc, char** argv)
 {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--version") == 0) {
@@ -83,7 +81,7 @@ static bool isLDMode(int argc, char **argv)
     return true;
 }
 
-static int execCC(int argc, char **argv)
+static int execCC(int argc, char** argv)
 {
     if (useASAN()) {
         argv[argc++] = "-fsanitize=address";
@@ -97,14 +95,14 @@ static int execCC(int argc, char **argv)
     argv[argc] = NULL;
 
     if (isCXX) {
-        const char *cxx_path = getenv("HFUZZ_CXX_PATH");
+        const char* cxx_path = getenv("HFUZZ_CXX_PATH");
         if (cxx_path != NULL) {
             execvp(cxx_path, argv);
             PLOG_E("execvp('%s')", cxx_path);
             return EXIT_FAILURE;
         }
     } else {
-        const char *cc_path = getenv("HFUZZ_CC_PATH");
+        const char* cc_path = getenv("HFUZZ_CC_PATH");
         if (cc_path != NULL) {
             execvp(cc_path, argv);
             PLOG_E("execvp('%s')", cc_path);
@@ -141,20 +139,20 @@ static int execCC(int argc, char **argv)
 }
 
 /* It'll point back to the libhfuzz's source tree */
-char *getLibHfuzzIncPath(void)
+char* getIncPaths(void)
 {
-#if !defined(_HFUZZ_LHFUZZ_INC_PATH)
-#error "You need to define _HFUZZ_LHFUZZ_INC_PATH"
+#if !defined(_HFUZZ_INC_PATH)
+#error "You need to define _HFUZZ_INC_PATH"
 #endif
 
     static char path[PATH_MAX];
-    snprintf(path, sizeof(path), "-I%s", _XSTR(_HFUZZ_LHFUZZ_INC_PATH));
+    snprintf(path, sizeof(path), "-I%s", _XSTR(_HFUZZ_INC_PATH));
     return path;
 }
 
-static void commonOpts(int *j, char **args)
+static void commonOpts(int* j, char** args)
 {
-    args[(*j)++] = getLibHfuzzIncPath();
+    args[(*j)++] = getIncPaths();
     if (isGCC) {
         /* That's the best gcc-6/7 currently offers */
         args[(*j)++] = "-fsanitize-coverage=trace-pc";
@@ -178,14 +176,18 @@ static void commonOpts(int *j, char **args)
 
 static bool getLibHfuzz(void)
 {
+    if (lhfuzzPath[0] == 0) {
+        snprintf(lhfuzzPath, sizeof(lhfuzzPath), "/tmp/libhfuzz.%d.a", geteuid());
+    }
+
     extern uint8_t lhfuzz_start __asm__("lhfuzz_start");
     extern uint8_t lhfuzz_end __asm__("lhfuzz_end");
 
-    ptrdiff_t len = (uintptr_t) & lhfuzz_end - (uintptr_t) & lhfuzz_start;
+    ptrdiff_t len = (uintptr_t)&lhfuzz_end - (uintptr_t)&lhfuzz_start;
 
     /* Does the library exist and is of the expected size */
     struct stat st;
-    if (stat(LHFUZZ_A_PATH, &st) != -1) {
+    if (stat(lhfuzzPath, &st) != -1) {
         if (st.st_size == len) {
             return true;
         }
@@ -198,17 +200,16 @@ static bool getLibHfuzz(void)
         PLOG_E("mkostemp('%s')", template);
         return false;
     }
+    defer { close(fd); };
 
     bool ret = files_writeToFd(fd, &lhfuzz_start, len);
     if (!ret) {
         PLOG_E("Couldn't write to '%s'", template);
-        close(fd);
         return false;
     }
-    close(fd);
 
-    if (rename(template, LHFUZZ_A_PATH) == -1) {
-        PLOG_E("Couldn't rename('%s', '%s')", template, LHFUZZ_A_PATH);
+    if (rename(template, lhfuzzPath) == -1) {
+        PLOG_E("Couldn't rename('%s', '%s')", template, lhfuzzPath);
         unlink(template);
         return false;
     }
@@ -216,9 +217,9 @@ static bool getLibHfuzz(void)
     return true;
 }
 
-static int ccMode(int argc, char **argv)
+static int ccMode(int argc, char** argv)
 {
-    char *args[ARGS_MAX];
+    char* args[ARGS_MAX];
 
     int j = 0;
     if (isCXX) {
@@ -235,13 +236,13 @@ static int ccMode(int argc, char **argv)
     return execCC(j, args);
 }
 
-static int ldMode(int argc, char **argv)
+static int ldMode(int argc, char** argv)
 {
     if (!getLibHfuzz()) {
         return EXIT_FAILURE;
     }
 
-    char *args[ARGS_MAX];
+    char* args[ARGS_MAX];
 
     int j = 0;
     if (isCXX) {
@@ -292,19 +293,19 @@ static int ldMode(int argc, char **argv)
      */
     args[j++] = "-Wl,-z,muldefs";
     args[j++] = "-Wl,--whole-archive";
-    args[j++] = LHFUZZ_A_PATH;
+    args[j++] = lhfuzzPath;
     args[j++] = "-Wl,--no-whole-archive";
 
-    /* libcommon.a will use it when compiled with clang */
+/* libcommon.a will use it when compiled with clang */
 #if defined(__clang__)
     args[j++] = "-lBlocksRuntime";
-#endif                          /*  defined(__clang__) */
+#endif /*  defined(__clang__) */
     args[j++] = "-lpthread";
 
     return execCC(j, args);
 }
 
-int main(int argc, char **argv)
+int main(int argc, char** argv)
 {
     if (strstr(basename(util_StrDup(argv[0])), "++") != NULL) {
         isCXX = true;

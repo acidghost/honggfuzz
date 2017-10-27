@@ -19,8 +19,8 @@
 
 */
 
-#include "common.h"
 #include "log.h"
+#include "common.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -40,18 +40,17 @@
 
 #if defined(_HF_ARCH_LINUX)
 #include <sys/syscall.h>
-#define __hf_pid()      (pid_t) syscall(__NR_gettid)
-#else                           /* defined(_HF_ARCH_LINUX) */
-#define __hf_pid()      getpid()
-#endif                          /* defined(_HF_ARCH_LINUX) */
+#define __hf_pid() (pid_t) syscall(__NR_gettid)
+#else /* defined(_HF_ARCH_LINUX) */
+#define __hf_pid() getpid()
+#endif /* defined(_HF_ARCH_LINUX) */
 
 static int log_fd = STDERR_FILENO;
 static bool log_fd_isatty = false;
 enum llevel_t log_level = INFO;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-__attribute__ ((constructor))
-static void log_init(void)
+__attribute__((constructor)) static void log_init(void)
 {
     log_level = INFO;
     log_fd = fcntl(STDERR_FILENO, F_DUPFD_CLOEXEC, 0);
@@ -65,7 +64,7 @@ static void log_init(void)
  * Log to stderr by default. Use a dup()d fd, because in the future we'll associate the
  * connection socket with fd (0, 1, 2).
  */
-bool logInitLogFile(const char *logfile, enum llevel_t ll)
+bool logInitLogFile(const char* logfile, enum llevel_t ll)
 {
     log_level = ll;
 
@@ -83,26 +82,26 @@ bool logInitLogFile(const char *logfile, enum llevel_t ll)
     return true;
 }
 
-void logLog(enum llevel_t ll, const char *fn, int ln, bool perr, const char *fmt, ...)
+void logLog(enum llevel_t ll, const char* fn, int ln, bool perr, const char* fmt, ...)
 {
     char strerr[512];
     if (perr == true) {
         snprintf(strerr, sizeof(strerr), "%s", strerror(errno));
     }
     struct ll_t {
-        const char *descr;
-        const char *prefix;
+        const char* descr;
+        const char* prefix;
         const bool print_funcline;
         const bool print_time;
     };
     static const struct ll_t logLevels[] = {
-        {"F", "\033[7;35m", true, true},
-        {"E", "\033[1;31m", true, true},
-        {"W", "\033[0;33m", true, true},
-        {"I", "\033[1m", false, false},
-        {"D", "\033[0;4m", true, true},
-        {"HR", "\033[0m", false, false},
-        {"HB", "\033[1m", false, false},
+        { "F", "\033[7;35m", true, true },
+        { "E", "\033[1;31m", true, true },
+        { "W", "\033[0;33m", true, true },
+        { "I", "\033[1m", false, false },
+        { "D", "\033[0;4m", true, true },
+        { "HR", "\033[0m", false, false },
+        { "HB", "\033[1m", false, false },
     };
 
     time_t ltstamp = time(NULL);
@@ -147,37 +146,16 @@ void logLog(enum llevel_t ll, const char *fn, int ln, bool perr, const char *fmt
     }
 }
 
-void logStop(int sig)
-{
-    LOG_I("Server stops due to fatal signal (%d) caught. Exiting", sig);
-}
+void logStop(int sig) { LOG_I("Server stops due to fatal signal (%d) caught. Exiting", sig); }
 
-void logRedirectLogFD(int fd)
-{
-    log_fd = fd;
-}
+void logRedirectLogFD(int fd) { log_fd = fd; }
 
-void logDirectlyToFD(const char *msg)
-{
-    dprintf(log_fd, "%s", msg);
-}
+void logDirectlyToFD(const char* msg) { dprintf(log_fd, "%s", msg); }
 
-pthread_mutex_t *logMutexGet(void)
-{
-    return &log_mutex;
-}
+pthread_mutex_t* logMutexGet(void) { return &log_mutex; }
 
-void logMutexReset(void)
-{
-    pthread_mutex_init(&log_mutex, NULL);
-}
+void logMutexReset(void) { pthread_mutex_init(&log_mutex, NULL); }
 
-bool logIsTTY(void)
-{
-    return log_fd_isatty;
-}
+bool logIsTTY(void) { return log_fd_isatty; }
 
-int logFd(void)
-{
-    return log_fd;
-}
+int logFd(void) { return log_fd; }

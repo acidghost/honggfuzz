@@ -12,7 +12,8 @@ extern "C" {
 #include <string.h>
 #include <unistd.h>
 
-#include <libhfuzz.h>
+#include <hf_ssl_lib.h>
+#include <libhfuzz/libhfuzz.h>
 
 static const uint8_t kCertificateDER[] = {
     0x30, 0x82, 0x05, 0x65, 0x30, 0x82, 0x03, 0x4d, 0x02, 0x09, 0x00, 0xe8,
@@ -573,9 +574,6 @@ static const uint8_t kDSACertDER[] = {
 
 static SSL_CTX* ctx = NULL;
 
-int rand_predictable __attribute__((weak));
-void RAND_reset_for_fuzzing(void) __attribute__((weak));
-
 unsigned int psk_callback(SSL* ssl, const char* identity, unsigned char* psk,
     unsigned int max_psk_len)
 {
@@ -596,7 +594,8 @@ static int srp_callback(SSL* s, int* ad, void* arg)
     }
     return SSL_ERROR_NONE;
 }
-#endif /* !defined(LIBRESSL_VERSION_NUMBER) && !defined(BORINGSSL_API_VERSION) */
+#endif /* !defined(LIBRESSL_VERSION_NUMBER) && !defined(BORINGSSL_API_VERSION) \
+          */
 
 int alpn_callback(SSL* ssl, const unsigned char** out, unsigned char* outlen,
     const unsigned char* in, unsigned int inlen, void* arg)
@@ -606,7 +605,8 @@ int alpn_callback(SSL* ssl, const unsigned char** out, unsigned char* outlen,
     return SSL_TLSEXT_ERR_OK;
 }
 
-static int npn_callback(SSL* ssl, const uint8_t** out, unsigned* out_len, void* arg)
+static int npn_callback(SSL* ssl, const uint8_t** out, unsigned* out_len,
+    void* arg)
 {
     static const uint8_t kProtocols[] = {
         0x01, 'a', 0x02, 'a', 'a', 0x03, 'a', 'a', 'a',
@@ -618,14 +618,10 @@ static int npn_callback(SSL* ssl, const uint8_t** out, unsigned* out_len, void* 
 
 int LLVMFuzzerInitialize(int* argc, char*** argv)
 {
-    rand_predictable = 1;
-
     SSL_library_init();
     OpenSSL_add_ssl_algorithms();
     ERR_load_crypto_strings();
-
-    if (RAND_reset_for_fuzzing)
-        RAND_reset_for_fuzzing();
+    HFResetRand();
 
     ctx = SSL_CTX_new(SSLv23_method());
     const uint8_t* bufp = kRSAPrivateKeyDER;
@@ -643,7 +639,11 @@ int LLVMFuzzerInitialize(int* argc, char*** argv)
     ret = SSL_CTX_use_certificate(ctx, cert);
     assert(ret == 1);
     X509_free(cert);
-    ret = SSL_CTX_set_cipher_list(ctx, "ALL:eNULL:aNULL:DSS");
+#if defined(BORINGSSL_API_VERSION)
+    ret = SSL_CTX_set_cipher_list(ctx, "ALL");
+#else
+    ret = SSL_CTX_set_cipher_list(ctx, "ALL:COMPLEMENTOFALL");
+#endif // defined(BORINGSSL_API_VERSION)
     assert(ret == 1);
 
     X509_STORE* store = X509_STORE_new();
@@ -690,15 +690,23 @@ int LLVMFuzzerInitialize(int* argc, char*** argv)
     assert(ret == 1);
     ret = SSL_CTX_set_srp_cb_arg(ctx, NULL);
     assert(ret == 1);
-#endif /* !defined(LIBRESSL_VERSION_NUMBER) && !defined(BORINGSSL_API_VERSION) */
+#endif /* !defined(LIBRESSL_VERSION_NUMBER) && !defined(BORINGSSL_API_VERSION) \
+          */
 
     SSL_CTX_set_alpn_select_cb(ctx, alpn_callback, NULL);
     SSL_CTX_set_next_protos_advertised_cb(ctx, npn_callback, NULL);
     SSL_CTX_set_ecdh_auto(ctx, 1);
 
+    long opts = SSL_CTX_get_options(ctx);
+    opts |= SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION;
+    opts |= SSL_OP_LEGACY_SERVER_CONNECT;
+    opts |= SSL_OP_ALL;
+    SSL_CTX_set_options(ctx, opts);
+
     return 1;
 }
 
+void RAND_reset_for_fuzzing(void) __attribute__((weak));
 int LLVMFuzzerTestOneInput(const uint8_t* buf, size_t len)
 {
     if (RAND_reset_for_fuzzing) {
@@ -715,31 +723,58 @@ int LLVMFuzzerTestOneInput(const uint8_t* buf, size_t len)
 
     SSL_set_bio(server, in, out);
 
-    if (SSL_accept(server) == 1) {
-        X509* peer;
-        if ((peer = SSL_get_peer_certificate(server)) != NULL) {
-            SSL_get_verify_result(server);
-            X509_free(peer);
-        }
-        uint8_t tmp[1024 * 1024];
-        for (;;) {
-            ssize_t r = SSL_read(server, tmp, sizeof(tmp));
-            if (r <= 0) {
-                SSL_shutdown(server);
-                break;
-            }
-            if (SSL_write(server, tmp, r) <= 0) {
-                SSL_shutdown(server);
-                break;
-            }
-#ifndef OPENSSL_NO_HEARTBEATS
-            SSL_heartbeat(server);
-#endif /* ifndef OPENSSL_NO_HEARTBEATS */
-        }
-    } else {
-        ERR_print_errors_fp(stderr);
-    }
+#if !defined(LIBRESSL_VERSION_NUMBER) && !defined(BORINGSSL_API_VERSION)
+    SSL_enable_ct(server, SSL_CT_VALIDATION_STRICT);
+    SSL_set_dh_auto(server, 1);
+    SSL_set_max_early_data(server, 128);
+    static const uint8_t edata_buf[128] = { 1, 0 };
+    size_t written = 0;
+    SSL_write_early_data(server, edata_buf, sizeof(edata_buf), &written);
+#endif // !defined(LIBRESSL_VERSION_NUMBER) && !defined(BORINGSSL_API_VERSION)
 
+#if !defined(LIBRESSL_VERSION_NUMBER)
+    SSL_set_min_proto_version(server, SSL3_VERSION);
+    SSL_set_max_proto_version(server, TLS1_3_VERSION);
+#endif // !defined(LIBRESSL_VERSION_NUMBER)
+
+    /* Try it two times to test SSL_clear() */
+    for (unsigned i = 0; i < 2; i++) {
+        if (SSL_accept(server) == 1) {
+            uint8_t tmp[1024 * 1024];
+#if !defined(LIBRESSL_VERSION_NUMBER) && !defined(BORINGSSL_API_VERSION)
+            static const uint8_t early_data_buf[128] = { 1, 0 };
+            size_t readbytes = 0;
+            SSL_read_early_data(server, tmp, sizeof(tmp), &readbytes);
+#endif // !defined(LIBRESSL_VERSION_NUMBER) && !defined(BORINGSSL_API_VERSION)
+
+            X509* peer;
+            if ((peer = SSL_get_peer_certificate(server)) != NULL) {
+                SSL_get_verify_result(server);
+                X509_free(peer);
+            }
+            for (;;) {
+                ssize_t r = SSL_read(server, tmp, sizeof(tmp));
+                if (r <= 0) {
+                    SSL_shutdown(server);
+                    break;
+                }
+                if (SSL_write(server, tmp, r) <= 0) {
+                    SSL_shutdown(server);
+                    break;
+                }
+                SSL_renegotiate(server);
+                SSL_set_mtu(server, 8);
+#ifndef OPENSSL_NO_HEARTBEATS
+                SSL_heartbeat(server);
+#endif /* ifndef OPENSSL_NO_HEARTBEATS */
+            }
+        } else {
+            ERR_print_errors_fp(stderr);
+        }
+
+        SSL_shutdown(server);
+        SSL_clear(server);
+    }
     SSL_free(server);
 
     return 0;

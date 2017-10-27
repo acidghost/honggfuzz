@@ -12,7 +12,8 @@ extern "C" {
 #include <string.h>
 #include <unistd.h>
 
-#include <libhfuzz.h>
+#include <hf_ssl_lib.h>
+#include <libhfuzz/libhfuzz.h>
 
 static const uint8_t kCertificateDER[] = {
     0x30, 0x82, 0x05, 0x65, 0x30, 0x82, 0x03, 0x4d, 0x02, 0x09, 0x00, 0xe8,
@@ -573,9 +574,6 @@ static const uint8_t kDSACertDER[] = {
 
 static SSL_CTX* ctx = NULL;
 
-int rand_predictable __attribute__((weak));
-void RAND_reset_for_fuzzing(void) __attribute__((weak));
-
 unsigned int psk_callback(SSL* ssl, const char* hint, char* identuty,
     unsigned int max_identity_len, unsigned char* psk,
     unsigned int max_psk_len)
@@ -586,13 +584,9 @@ unsigned int psk_callback(SSL* ssl, const char* hint, char* identuty,
 
 int LLVMFuzzerInitialize(int* argc, char*** argv)
 {
-    rand_predictable = 1;
-
     SSL_library_init();
     OpenSSL_add_ssl_algorithms();
-
-    if (RAND_reset_for_fuzzing)
-        RAND_reset_for_fuzzing();
+    HFResetRand();
 
     ctx = SSL_CTX_new(SSLv23_method());
     const uint8_t* bufp = kRSAPrivateKeyDER;
@@ -610,7 +604,11 @@ int LLVMFuzzerInitialize(int* argc, char*** argv)
     ret = SSL_CTX_use_certificate(ctx, cert);
     assert(ret == 1);
     X509_free(cert);
-    ret = SSL_CTX_set_cipher_list(ctx, "ALL:eNULL:aNULL:DSS");
+#if defined(BORINGSSL_API_VERSION)
+    ret = SSL_CTX_set_cipher_list(ctx, "ALL");
+#else
+    ret = SSL_CTX_set_cipher_list(ctx, "ALL:COMPLEMENTOFALL");
+#endif // defined(BORINGSSL_API_VERSION)
     assert(ret == 1);
 
     X509_STORE* store = X509_STORE_new();
@@ -655,13 +653,21 @@ int LLVMFuzzerInitialize(int* argc, char*** argv)
 
     SSL_CTX_set_ecdh_auto(ctx, 1);
 
+    long opts = SSL_CTX_get_options(ctx);
+    opts |= SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION;
+    opts |= SSL_OP_LEGACY_SERVER_CONNECT;
+    opts |= SSL_OP_ALL;
+    SSL_CTX_set_options(ctx, opts);
+
     return 1;
 }
 
+void RAND_reset_for_fuzzing(void) __attribute__((weak));
 int LLVMFuzzerTestOneInput(const uint8_t* buf, size_t len)
 {
-    if (RAND_reset_for_fuzzing)
+    if (RAND_reset_for_fuzzing) {
         RAND_reset_for_fuzzing();
+    }
 
     SSL* client = SSL_new(ctx);
     SSL_set_tlsext_host_name(client, "localhost");
@@ -673,33 +679,57 @@ int LLVMFuzzerTestOneInput(const uint8_t* buf, size_t len)
     BIO_set_fd(out, 1, BIO_NOCLOSE);
 
     SSL_set_bio(client, in, out);
+#if !defined(LIBRESSL_VERSION_NUMBER) && !defined(BORINGSSL_API_VERSION)
+    SSL_enable_ct(client, SSL_CT_VALIDATION_PERMISSIVE);
+    SSL_set_dh_auto(client, 1);
+    SSL_set_max_early_data(client, 128);
+    static const uint8_t edata_buf[128] = { 1, 0 };
+    size_t written = 0;
+    SSL_write_early_data(client, edata_buf, sizeof(edata_buf), &written);
+#endif // !defined(LIBRESSL_VERSION_NUMBER) && !defined(BORINGSSL_API_VERSION)
 
-    if (SSL_connect(client) == 1) {
-        X509* peer;
-        if ((peer = SSL_get_peer_certificate(client)) != NULL) {
-            SSL_get_verify_result(client);
-            X509_free(peer);
-        }
-        // Keep reading application data until error or EOF.
-        uint8_t tmp[1024 * 1024];
-        for (;;) {
-            ssize_t r = SSL_read(client, tmp, sizeof(tmp));
-            if (r <= 0) {
-                SSL_shutdown(client);
-                break;
+#if !defined(LIBRESSL_VERSION_NUMBER)
+    SSL_set_min_proto_version(client, SSL3_VERSION);
+    SSL_set_max_proto_version(client, TLS1_3_VERSION);
+#endif // !defined(LIBRESSL_VERSION_NUMBER)
+
+    /* Try it two times to test SSL_clear() */
+    for (unsigned i = 0; i < 2; i++) {
+        if (SSL_connect(client) == 1) {
+            uint8_t tmp[1024 * 1024];
+#if !defined(LIBRESSL_VERSION_NUMBER) && !defined(BORINGSSL_API_VERSION)
+            size_t readbytes = 0;
+            SSL_read_early_data(client, tmp, sizeof(tmp), &readbytes);
+#endif // !defined(LIBRESSL_VERSION_NUMBER) && !defined(BORINGSSL_API_VERSION)
+            X509* peer;
+            if ((peer = SSL_get_peer_certificate(client)) != NULL) {
+                SSL_get_verify_result(client);
+                X509_free(peer);
             }
-            if (SSL_write(client, tmp, r) <= 0) {
-                SSL_shutdown(client);
-                break;
-            }
+            // Keep reading application data until error or EOF.
+            for (;;) {
+                ssize_t r = SSL_read(client, tmp, sizeof(tmp));
+                if (r <= 0) {
+                    SSL_shutdown(client);
+                    break;
+                }
+                if (SSL_write(client, tmp, r) <= 0) {
+                    SSL_shutdown(client);
+                    break;
+                }
+                SSL_renegotiate(client);
+                SSL_set_mtu(client, 8);
 #ifndef OPENSSL_NO_HEARTBEATS
-            SSL_heartbeat(client);
+                SSL_heartbeat(client);
 #endif
+            }
+        } else {
+            ERR_print_errors_fp(stderr);
         }
-    } else {
-        ERR_print_errors_fp(stderr);
-    }
 
+        SSL_shutdown(client);
+        SSL_clear(client);
+    }
     SSL_free(client);
 
     return 0;

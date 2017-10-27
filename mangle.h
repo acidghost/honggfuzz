@@ -24,9 +24,9 @@
 #ifndef _HF_MANGLE_H_
 #define _HF_MANGLE_H_
 
-#include <stdint.h>
+#include "honggfuzz.h"
 
-extern void mangle_mangleContent(honggfuzz_t * hfuzz, fuzzer_t * fuzzer);
+extern void mangle_mangleContent(honggfuzz_t* hfuzz, fuzzer_t* fuzzer);
 extern size_t mangle_mangleFuncsN(void);
 
 #endif

@@ -27,18 +27,17 @@
  * initial seed and maintained until seed is replaced. Trie nodes store the loaded (as exposed
  * from *.sancov.map file) execs/DSOs from target application using the map name as key. Trie node
  * data struct (trieData_t) maintains information for each instrumented map including a bitmap with
- * all hit relative BB addresses (realBBAddr - baseAddr to circumvent ASLR). Map's bitmap is updated while
- * new areas on target application are discovered based on absolute elitism implemented at
+ * all hit relative BB addresses (realBBAddr - baseAddr to circumvent ASLR). Map's bitmap is updated
+ * while new areas on target application are discovered based on absolute elitism implemented at
  * fuzz_sanCovFeedback().
  *
- * For individual data files a pid (fuzzer's thread or remote process) based filename search is performed
- * to identify all files belonging to examined execution. This method doesn't implement yet bitmap runtime
- * data to detect newly discovered areas. It's mainly used so far as a comparison metric for raw-unpack method
- * and stability check for sancov experimental features such as coverage counters:
- * http://clang.llvm.org/docs/SanitizerCoverage.html
+ * For individual data files a pid (fuzzer's thread or remote process) based filename search is
+ * performed to identify all files belonging to examined execution. This method doesn't implement
+ * yet bitmap runtime data to detect newly discovered areas. It's mainly used so far as a comparison
+ * metric for raw-unpack method and stability check for sancov experimental features such as
+ * coverage counters: http://clang.llvm.org/docs/SanitizerCoverage.html
  */
 
-#include "libcommon/common.h"
 #include "sancov.h"
 
 #include <ctype.h>
@@ -51,9 +50,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include "libcommon/common.h"
 #include "libcommon/files.h"
 #include "libcommon/log.h"
 #include "libcommon/util.h"
+#include "sanitizers.h"
 
 /* sancov files magic values */
 #define kMagic32 0xC0BFFFFFFFFFFF32
@@ -78,23 +79,24 @@
  * Probably there aren't many we can do to deal with this issue without introducing
  * a huge performance overhead at an already costly feedback method.
  *
- * [1] 'https://llvm.org/svn/llvm-project/compiler-rt/branches/release_38/lib/sanitizer_common/sanitizer_coverage_libcdep.cc'
+ * [1]
+ 'https://llvm.org/svn/llvm-project/compiler-rt/branches/release_38/lib/sanitizer_common/sanitizer_coverage_libcdep.cc'
  */
 #define kPcArrayMmapSize (64 * 1024)
 
 /*
  * bitmap implementation
  */
-static bitmap_t *sancov_newBitmap(uint32_t capacity)
+static bitmap_t* sancov_newBitmap(uint32_t capacity)
 {
-    bitmap_t *pBM = util_Malloc(sizeof(bitmap_t));
+    bitmap_t* pBM = util_Malloc(sizeof(bitmap_t));
     pBM->capacity = capacity;
     pBM->nChunks = (capacity + 31) / 32;
     pBM->pChunks = util_Calloc(pBM->nChunks * sizeof(uint32_t));
     return pBM;
 }
 
-static inline bool sancov_queryBitmap(bitmap_t * pBM, uint32_t index)
+static inline bool sancov_queryBitmap(bitmap_t* pBM, uint32_t index)
 {
     if (index > pBM->capacity) {
         LOG_E("bitmap overflow (%u)", index);
@@ -106,7 +108,7 @@ static inline bool sancov_queryBitmap(bitmap_t * pBM, uint32_t index)
     return false;
 }
 
-static inline void sancov_setBitmap(bitmap_t * pBM, uint32_t index)
+static inline void sancov_setBitmap(bitmap_t* pBM, uint32_t index)
 {
     /* This will be removed. So far checks only to verify accepted ranges. */
     if (index >= pBM->capacity) {
@@ -115,7 +117,7 @@ static inline void sancov_setBitmap(bitmap_t * pBM, uint32_t index)
     pBM->pChunks[index / 32] |= (1 << (index % 32));
 }
 
-static inline void sancov_destroyBitmap(bitmap_t * pBM)
+static inline void sancov_destroyBitmap(bitmap_t* pBM)
 {
     free(pBM->pChunks);
     free(pBM);
@@ -124,9 +126,9 @@ static inline void sancov_destroyBitmap(bitmap_t * pBM)
 /*
  * Trie implementation
  */
-static node_t *sancov_trieCreateNode(char key)
+static node_t* sancov_trieCreateNode(char key)
 {
-    node_t *node = (node_t *) util_Malloc(sizeof(node_t));
+    node_t* node = (node_t*)util_Malloc(sizeof(node_t));
     node->key = key;
     node->next = NULL;
     node->children = NULL;
@@ -138,7 +140,7 @@ static node_t *sancov_trieCreateNode(char key)
     return node;
 }
 
-static node_t *sancov_trieSearch(node_t * root, const char *key)
+static node_t* sancov_trieSearch(node_t* root, const char* key)
 {
     node_t *pNodeLevel = root, *pNodePtr = NULL;
     int nodeLevelId = 0;
@@ -163,7 +165,7 @@ static node_t *sancov_trieSearch(node_t * root, const char *key)
     }
 }
 
-static void sancov_trieAdd(node_t ** root, const char *key)
+static void sancov_trieAdd(node_t** root, const char* key)
 {
     if (*root == NULL) {
         LOG_E("Invalid Trie (NULL root node)");
@@ -171,7 +173,7 @@ static void sancov_trieAdd(node_t ** root, const char *key)
     }
 
     /* Traverse Trie */
-    node_t *pTravNode = (*root)->children;
+    node_t* pTravNode = (*root)->children;
     if (pTravNode == NULL) {
         /* First node */
         for (pTravNode = *root; *key != '\0'; pTravNode = pTravNode->children) {
@@ -222,7 +224,7 @@ static void sancov_trieAdd(node_t ** root, const char *key)
     return;
 }
 
-static inline void sancov_trieFreeNode(node_t * node)
+static inline void sancov_trieFreeNode(node_t* node)
 {
     /* First destroy bitmap heap buffers allocated for instrumented maps */
     if (node->data.pBM) {
@@ -231,17 +233,17 @@ static inline void sancov_trieFreeNode(node_t * node)
     free(node);
 }
 
-static inline void sancov_trieCreate(node_t ** root)
+static inline void sancov_trieCreate(node_t** root)
 {
     /* Create root node if new Trie */
     *root = sancov_trieCreateNode('\0');
 }
 
 /* Destroy Trie - iterate nodes and free memory */
-UNUSED static void sancov_trieDestroy(node_t * root)
+UNUSED static void sancov_trieDestroy(node_t* root)
 {
-    node_t *pNode = root;
-    node_t *pNodeTmp = root;
+    node_t* pNode = root;
+    node_t* pNodeTmp = root;
     while (pNode) {
         while (pNode->children) {
             pNode = pNode->children;
@@ -277,7 +279,7 @@ UNUSED static void sancov_trieDestroy(node_t * root)
 }
 
 /* Modified interpolation search algorithm to search for nearest address fit */
-static inline uint64_t sancov_interpSearch(uint64_t * buf, uint64_t size, uint64_t key)
+static inline uint64_t sancov_interpSearch(uint64_t* buf, uint64_t size, uint64_t key)
 {
     /* Avoid extra checks assuming caller always provides non-zero array size */
     uint64_t low = 0;
@@ -298,10 +300,10 @@ static inline uint64_t sancov_interpSearch(uint64_t * buf, uint64_t size, uint64
 }
 
 /* qsort struct comparison function (memMap_t struct start addr field) */
-static int sancov_qsortCmp(const void *a, const void *b)
+static int sancov_qsortCmp(const void* a, const void* b)
 {
-    memMap_t *pA = (memMap_t *) a;
-    memMap_t *pB = (memMap_t *) b;
+    memMap_t* pA = (memMap_t*)a;
+    memMap_t* pB = (memMap_t*)b;
     if (pA->start < pB->start) {
         return -1;
     } else if (pA->start > pB->start) {
@@ -311,54 +313,52 @@ static int sancov_qsortCmp(const void *a, const void *b)
         LOG_W("Duplicate map start addr detected");
         return 0;
     }
-
 }
 
-static bool sancov_sanCovParseRaw(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
+static bool sancov_sanCovParseRaw(honggfuzz_t* hfuzz, fuzzer_t* fuzzer)
 {
     int dataFd = -1;
-    uint8_t *dataBuf = NULL;
+    uint8_t* dataBuf = NULL;
     off_t dataFileSz = 0, pos = 0;
     bool is32bit = true;
     char covFile[PATH_MAX] = { 0 };
     pid_t targetPid = (hfuzz->linux.pid > 0) ? hfuzz->linux.pid : fuzzer->pid;
 
     /* Fuzzer local runtime data structs - need free() before exit */
-    uint64_t *startMapsIndex = NULL;
-    memMap_t *mapsBuf = NULL;
+    uint64_t* startMapsIndex = NULL;
+    memMap_t* mapsBuf = NULL;
 
     /* Local counters */
-    uint64_t nBBs = 0;          /* Total BB hits found in raw file */
-    uint64_t nZeroBBs = 0;      /* Number of non-hit instrumented BBs */
-    uint64_t mapsNum = 0;       /* Total number of entries in map file */
-    uint64_t noCovMapsNum = 0;  /* Loaded DSOs not compiled with coverage */
+    uint64_t nBBs = 0; /* Total BB hits found in raw file */
+    uint64_t nZeroBBs = 0; /* Number of non-hit instrumented BBs */
+    uint64_t mapsNum = 0; /* Total number of entries in map file */
+    uint64_t noCovMapsNum = 0; /* Loaded DSOs not compiled with coverage */
 
     /* File line-by-line read help buffers */
-    __block char *pLine = NULL;
+    __block char* pLine = NULL;
     size_t lineSz = 0;
 
     /* Coverage data analysis starts by parsing map file listing */
-    snprintf(covFile, sizeof(covFile), "%s/%s/%d.sancov.map", hfuzz->workDir, _HF_SANCOV_DIR,
-             targetPid);
+    snprintf(
+        covFile, sizeof(covFile), "%s/%s/%d.sancov.map", hfuzz->workDir, _HF_SANCOV_DIR, targetPid);
     if (!files_exists(covFile)) {
         LOG_D("sancov map file not found");
         return false;
     }
-    FILE *fCovMap = fopen(covFile, "rb");
+    FILE* fCovMap = fopen(covFile, "rb");
     if (fCovMap == NULL) {
         PLOG_E("Couldn't open '%s' - R/O mode", covFile);
         return false;
     }
-    defer {
-        fclose(fCovMap);
-    };
+    defer { fclose(fCovMap); };
 
     /* First line contains PC length (32/64-bit) */
     if (getline(&pLine, &lineSz, fCovMap) == -1) {
         LOG_E("Invalid map file '%s'", covFile);
         return false;
     }
-    defer {
+    defer
+    {
         free(pLine);
         pLine = NULL;
     };
@@ -378,9 +378,7 @@ static bool sancov_sanCovParseRaw(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
         mapsBuf = util_Malloc(prevMapsNum * sizeof(memMap_t));
     }
     /* It's OK to free(NULL) */
-    defer {
-        free(mapsBuf);
-    };
+    defer { free(mapsBuf); };
 
     /* Iterate map entries */
     for (;;) {
@@ -389,7 +387,7 @@ static bool sancov_sanCovParseRaw(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
         }
 
         /* Trim trailing whitespaces, not sure if needed copied from upstream sancov.py */
-        char *lineEnd = pLine + strlen(pLine) - 1;
+        char* lineEnd = pLine + strlen(pLine) - 1;
         while (lineEnd > pLine && isspace((int)*lineEnd)) {
             lineEnd--;
         }
@@ -400,12 +398,12 @@ static bool sancov_sanCovParseRaw(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
          * Start    End      Base     bin/DSO name
          * b5843000 b584e6ac b5843000 liblog.so
          */
-        memMap_t mapData = {.start = 0 };
-        char *savePtr = NULL;
+        memMap_t mapData = { .start = 0 };
+        char* savePtr = NULL;
         mapData.start = strtoull(strtok_r(pLine, " ", &savePtr), NULL, 16);
         mapData.end = strtoull(strtok_r(NULL, " ", &savePtr), NULL, 16);
         mapData.base = strtoull(strtok_r(NULL, " ", &savePtr), NULL, 16);
-        char *mapName = strtok_r(NULL, " ", &savePtr);
+        char* mapName = strtok_r(NULL, " ", &savePtr);
         memcpy(mapData.mapName, mapName, strlen(mapName));
 
         /* Interaction with global Trie should mutex wrap to avoid threads races */
@@ -418,10 +416,11 @@ static bool sancov_sanCovParseRaw(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
             }
         }
 
-        /* If no DSO number history (first run) or new DSO loaded, realloc local maps metadata buf */
+        /* If no DSO number history (first run) or new DSO loaded, realloc local maps metadata buf
+         */
         if (prevMapsNum == 0 || prevMapsNum < mapsNum) {
-            if ((mapsBuf =
-                 util_Realloc(mapsBuf, (size_t) (mapsNum + 1) * sizeof(memMap_t))) == NULL) {
+            if ((mapsBuf = util_Realloc(mapsBuf, (size_t)(mapsNum + 1) * sizeof(memMap_t)))
+                == NULL) {
                 PLOG_E("realloc failed (sz=%" PRIu64 ")", (mapsNum + 1) * sizeof(memMap_t));
                 return false;
             }
@@ -441,9 +440,7 @@ static bool sancov_sanCovParseRaw(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
 
     /* Create a quick index array with maps start addresses */
     startMapsIndex = util_Malloc(mapsNum * sizeof(uint64_t));
-    defer {
-        free(startMapsIndex);
-    };
+    defer { free(startMapsIndex); };
 
     /* Sort quick maps index */
     qsort(mapsBuf, mapsNum, sizeof(memMap_t), sancov_qsortCmp);
@@ -452,14 +449,15 @@ static bool sancov_sanCovParseRaw(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
     }
 
     /* mmap() .sancov.raw file */
-    snprintf(covFile, sizeof(covFile), "%s/%s/%d.sancov.raw", hfuzz->workDir, _HF_SANCOV_DIR,
-             targetPid);
+    snprintf(
+        covFile, sizeof(covFile), "%s/%s/%d.sancov.raw", hfuzz->workDir, _HF_SANCOV_DIR, targetPid);
     dataBuf = files_mapFile(covFile, &dataFileSz, &dataFd, false);
     if (dataBuf == NULL) {
         LOG_E("Couldn't open and map '%s' in R/O mode", covFile);
         return false;
     }
-    defer {
+    defer
+    {
         munmap(dataBuf, dataFileSz);
         close(dataFd);
     };
@@ -468,7 +466,7 @@ static bool sancov_sanCovParseRaw(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
      * Avoid cost of size checks inside raw data read loop by defining the read function
      * & pivot size based on PC length.
      */
-    uint64_t(*pReadRawBBAddrFunc) (const uint8_t *) = NULL;
+    uint64_t (*pReadRawBBAddrFunc)(const uint8_t*) = NULL;
     uint8_t pivot = 0;
     if (is32bit) {
         pReadRawBBAddrFunc = &util_getUINT32;
@@ -482,7 +480,7 @@ static bool sancov_sanCovParseRaw(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
      * Take advantage of data locality (next processed addr is very likely to belong
      * to same map) to avoid Trie node search for each read entry.
      */
-    node_t *curMap = NULL;
+    node_t* curMap = NULL;
     uint64_t prevIndex = 0;
 
     /* Iterate over data buffer containing list of hit BB addresses */
@@ -508,15 +506,15 @@ static bool sancov_sanCovParseRaw(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
                     {
                         MX_SCOPED_LOCK(&hfuzz->sanCov_mutex);
 
-                        curMap =
-                            sancov_trieSearch(hfuzz->covMetadata->children,
-                                              mapsBuf[bestFit].mapName);
+                        curMap = sancov_trieSearch(
+                            hfuzz->covMetadata->children, mapsBuf[bestFit].mapName);
                         if (curMap == NULL) {
                             LOG_E("Corrupted Trie - '%s' not found", mapsBuf[bestFit].mapName);
                             continue;
                         }
 
-                        /* Maintain bitmaps only for exec/DSOs with coverage enabled - allocate on first use */
+                        /* Maintain bitmaps only for exec/DSOs with coverage enabled - allocate on
+                         * first use */
                         if (curMap->data.pBM == NULL) {
                             LOG_D("Allocating bitmap for map '%s'", mapsBuf[bestFit].mapName);
                             curMap->data.pBM = sancov_newBitmap(_HF_SANCOV_BITMAP_SIZE);
@@ -534,7 +532,7 @@ static bool sancov_sanCovParseRaw(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
                 }
 
                 /* If new relative BB addr update DSO's bitmap */
-                uint32_t relAddr = (uint32_t) (bbAddr - mapsBuf[bestFit].base);
+                uint32_t relAddr = (uint32_t)(bbAddr - mapsBuf[bestFit].base);
                 if (!sancov_queryBitmap(curMap->data.pBM, relAddr)) {
 
                     /* Interaction with global Trie should mutex wrap to avoid threads races */
@@ -552,7 +550,7 @@ static bool sancov_sanCovParseRaw(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
                  * Normally this should never get executed. If hit, sanitizer
                  * coverage data collection come across some kind of bug.
                  */
-                LOG_E("Invalid BB addr (%#" PRIx64 ") at offset %" PRId64, bbAddr, (uint64_t) pos);
+                LOG_E("Invalid BB addr (%#" PRIx64 ") at offset %" PRId64, bbAddr, (uint64_t)pos);
             }
         }
         nBBs++;
@@ -571,7 +569,7 @@ static bool sancov_sanCovParseRaw(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
     fuzzer->sanCovCnts.hitBBCnt = nBBs;
     fuzzer->sanCovCnts.totalBBCnt = nBBs + nZeroBBs;
     fuzzer->sanCovCnts.dsoCnt = mapsNum;
-    fuzzer->sanCovCnts.iDsoCnt = mapsNum - noCovMapsNum;        /* Instrumented DSOs */
+    fuzzer->sanCovCnts.iDsoCnt = mapsNum - noCovMapsNum; /* Instrumented DSOs */
 
     if (hfuzz->linux.pid == 0 && hfuzz->persistent == false) {
         unlink(covFile);
@@ -579,18 +577,18 @@ static bool sancov_sanCovParseRaw(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
     return true;
 }
 
-static bool sancov_sanCovParse(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
+static bool sancov_sanCovParse(honggfuzz_t* hfuzz, fuzzer_t* fuzzer)
 {
     int dataFd = -1;
-    uint8_t *dataBuf = NULL;
+    uint8_t* dataBuf = NULL;
     off_t dataFileSz = 0, pos = 0;
     bool is32bit = true;
     char covFile[PATH_MAX] = { 0 };
-    DIR *pSanCovDir = NULL;
+    DIR* pSanCovDir = NULL;
     pid_t targetPid = (hfuzz->linux.pid > 0) ? hfuzz->linux.pid : fuzzer->pid;
 
     snprintf(covFile, sizeof(covFile), "%s/%s/%s.%d.sancov", hfuzz->workDir, _HF_SANCOV_DIR,
-             files_basename(hfuzz->cmdline[0]), targetPid);
+        files_basename(hfuzz->cmdline[0]), targetPid);
     if (!files_exists(covFile)) {
         LOG_D("Target sancov file not found");
         return false;
@@ -610,22 +608,21 @@ static bool sancov_sanCovParse(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
         PLOG_E("opendir('%s')", covFile);
         return false;
     }
-    defer {
-        closedir(pSanCovDir);
-    };
+    defer { closedir(pSanCovDir); };
 
-    struct dirent *pDir = NULL;
+    struct dirent* pDir = NULL;
     while ((pDir = readdir(pSanCovDir)) != NULL) {
         /* Parse files with target's pid */
         if (strstr(pDir->d_name, pidFSuffix)) {
-            snprintf(covFile, sizeof(covFile), "%s/%s/%s", hfuzz->workDir, _HF_SANCOV_DIR,
-                     pDir->d_name);
+            snprintf(
+                covFile, sizeof(covFile), "%s/%s/%s", hfuzz->workDir, _HF_SANCOV_DIR, pDir->d_name);
             dataBuf = files_mapFile(covFile, &dataFileSz, &dataFd, false);
             if (dataBuf == NULL) {
                 LOG_E("Couldn't open and map '%s' in R/O mode", covFile);
                 return false;
             }
-            defer {
+            defer
+            {
                 munmap(dataBuf, dataFileSz);
                 close(dataFd);
             };
@@ -651,7 +648,7 @@ static bool sancov_sanCovParse(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
              * Avoid cost of size checks inside raw data read loop by defining the read function
              * & pivot size based on PC length.
              */
-            uint64_t(*pReadRawBBAddrFunc) (const uint8_t *) = NULL;
+            uint64_t (*pReadRawBBAddrFunc)(const uint8_t*) = NULL;
             uint8_t pivot = 0;
             if (is32bit) {
                 pReadRawBBAddrFunc = &util_getUINT32;
@@ -690,7 +687,7 @@ static bool sancov_sanCovParse(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
  *
  * Enabled methods are controlled from sanitizer flags in arch.c
  */
-void sancov_Analyze(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
+void sancov_Analyze(honggfuzz_t* hfuzz, fuzzer_t* fuzzer)
 {
     if (!hfuzz->useSanCov) {
         return;
@@ -704,7 +701,7 @@ void sancov_Analyze(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
     }
 }
 
-bool sancov_Init(honggfuzz_t * hfuzz)
+bool sancov_Init(honggfuzz_t* hfuzz)
 {
     if (hfuzz->useSanCov == false) {
         return true;
