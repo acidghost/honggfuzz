@@ -752,7 +752,7 @@ static void* fuzz_threadNew(void *arg)
 
         /* Scan inject folder for unseen inputs */
         if (hfuzz->injectDir != NULL &&
-            (ATOMIC_GET(hfuzz->dynfileqRun) % syncInjectedTh) == 0)
+            (ATOMIC_GET(hfuzz->mutationsCnt) % syncInjectedTh) == 0)
         {
             if (!fuzz_injectFiles(hfuzz, &fuzzer)) {
                 LOG_W("failed to inject files");

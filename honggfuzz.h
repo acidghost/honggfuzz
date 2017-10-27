@@ -69,7 +69,7 @@
 #define _HF_PERSISTENT_FD 1023
 
 /* Minimum number of cycles through the dynamic queue before syncing injected */
-#define _HF_SYNC_EVERY 100
+#define _HF_SYNC_EVERY 1000
 
 /* Minimum number of mutations before writing stats again */
 #define _HF_LOG_STATS_EVERY 5000
