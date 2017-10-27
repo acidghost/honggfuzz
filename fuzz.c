@@ -608,7 +608,7 @@ static int fuzz_filterInject(const struct dirent *d)
     return strstr(d->d_name, "id:") == NULL ? 0 : -1;
 }
 
-static bool fuzz_injectFiles(honggfuzz_t * hfuzz, fuzzer_t * fuzzer UNUSED)
+static bool fuzz_injectFiles(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
 {
     struct dirent **namelist;
     int nfiles = scandir(hfuzz->injectDir, &namelist, fuzz_filterInject, alphasort);
@@ -658,6 +658,8 @@ static bool fuzz_injectFiles(honggfuzz_t * hfuzz, fuzzer_t * fuzzer UNUSED)
         TAILQ_INSERT_HEAD(&hfuzz->dynfileq, dynfile, pointers);
         hfuzz->dynfileqCnt++;
 
+        fuzzer->stats->injectedInputs++;
+
         if (maxInjectLast < 0 || file_id > (size_t) maxInjectLast) {
             maxInjectLast = file_id;
         }
@@ -679,8 +681,8 @@ static bool fuzz_logStats(honggfuzz_t * hfuzz UNUSED, fuzzer_t * fuzzer)
     }
 
     fuzzStats_t *stats = fuzzer->stats;
-    fprintf(fuzzer->statsFile, "executedInputs: %zu\n",
-        stats->executedInputs);
+    fprintf(fuzzer->statsFile, "executedInputs: %zu\ninjectedInputs: %zu\n",
+        stats->executedInputs, stats->injectedInputs);
 
     return true;
 }
@@ -694,7 +696,8 @@ static void* fuzz_threadNew(void *arg)
     FILE *statsFile = NULL;
     char statsFileName[PATH_MAX];
     fuzzStats_t stats = {
-        .executedInputs = 0
+        .executedInputs = 0,
+        .injectedInputs = 0
     };
     bool useStatsFile = hfuzz->statsDir != NULL;
     if (useStatsFile) {

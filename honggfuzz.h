@@ -280,6 +280,7 @@ typedef struct {
 
 typedef struct {
     size_t executedInputs;
+    size_t injectedInputs;
 } fuzzStats_t;
 
 typedef struct {
