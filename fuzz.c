@@ -618,8 +618,6 @@ static bool fuzz_injectFiles(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
         return false;
     }
 
-    MX_SCOPED_LOCK(&hfuzz->dynfileq_mutex);
-
     ssize_t maxInjectLast = hfuzz->injectLast;
     for (size_t i = 0; i < (size_t) nfiles; i++) {
         struct dirent *file_d = namelist[i];
@@ -655,10 +653,12 @@ static bool fuzz_injectFiles(honggfuzz_t * hfuzz, fuzzer_t * fuzzer)
             continue;
         }
 
-        TAILQ_INSERT_HEAD(&hfuzz->dynfileq, dynfile, pointers);
-        hfuzz->dynfileqCnt++;
-
-        fuzzer->stats->injectedInputs++;
+        {
+            MX_SCOPED_LOCK(&hfuzz->dynfileq_mutex);
+            TAILQ_INSERT_HEAD(&hfuzz->dynfileq, dynfile, pointers);
+            hfuzz->dynfileqCnt++;
+            fuzzer->stats->injectedInputs++;
+        }
 
         if (maxInjectLast < 0 || file_id > (size_t) maxInjectLast) {
             maxInjectLast = file_id;
