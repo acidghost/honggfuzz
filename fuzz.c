@@ -103,11 +103,6 @@ static bool fuzz_prepareFileDynamically(run_t* run) {
                 "coverage and/or CPU counters");
         }
 
-        /* REMOVEME
-        if (hfuzz->dynfileqCurrent == NULL
-            || hfuzz->dynfileqCurrent == TAILQ_LAST(&hfuzz->dynfileq, dictq_t)) {
-            hfuzz->dynfileqCurrent = TAILQ_FIRST(&hfuzz->dynfileq);
-            hfuzz->dynfileqRun++; */
         if (run->dynfileqCurrent == NULL) {
             run->dynfileqCurrent = TAILQ_FIRST(&run->global->dynfileq);
         } else {
