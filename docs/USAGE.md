@@ -10,17 +10,14 @@ Honggfuzz is a security oriented, feedback-driven, evolutionary, easy-to-use fuz
 
   * It's __multi-threaded__ and __multi-process__: no need to run multiple copies of your fuzzer, as honggfuzz can unlock potential of all your available CPU cores. The file corpus is shared between threads (and
  fuzzed instances)
-  * It's blazingly fast (esp. in the [persistent fuzzing mode](https://github.com/google/honggfuzz/blob/master/docs/PersistentFuzzing.md)). A simple _LLVMFuzzerTestOneInput_ function can be tested with __up to 1
+  * It's blazingly fast (specifically in the [persistent fuzzing mode](https://github.com/google/honggfuzz/blob/master/docs/PersistentFuzzing.md)). A simple _LLVMFuzzerTestOneInput_ function can be tested with __up to 1
 mo iterations per second__ on a relatively modern CPU (e.g. i7-6600K)
-  * Has a nice track record of uncovered security bugs: e.g. the __only__ (to the date) __vulnerability in OpenSSL with the [critical](https://www.openssl.org/news/secadv/20160926.txt) score mark__ was discovere
-d by honggfuzz
+  * Has a nice track record of uncovered security bugs: e.g. the __only__ (to the date) __vulnerability in OpenSSL with the [critical](https://www.openssl.org/news/secadv/20160926.txt) score mark__ was discovered by honggfuzz
   * Uses low-level interfaces to monitor processes (e.g. _ptrace_ under Linux). As opposed to other fuzzers, it __will discover and report hidden signals__ (caught and potentially hidden by signal handlers)
   * Easy-to-use, feed it a simple input corpus (__can even consist of a single, 1-byte file__) and it will work its way up expanding it utilizing feedback-based coverage metrics
-  * Supports several (more than any other coverage-based feedback-driven fuzzer) hardware-based (CPU: branch/instruction counting, __Intel BTS__, __Intel PT__) and software-based [feedback-driven fuzzing](https:
-//github.com/google/honggfuzz/blob/master/docs/FeedbackDrivenFuzzing.md) methods known from other fuzzers (libfuzzer, afl)
+  * Supports several (more than any other coverage-based feedback-driven fuzzer) hardware-based (CPU: branch/instruction counting, __Intel BTS__, __Intel PT__) and software-based [feedback-driven fuzzing](https://github.com/google/honggfuzz/blob/master/docs/FeedbackDrivenFuzzing.md) methods known from other fuzzers (libfuzzer, afl)
   * Works (at least) under GNU/Linux, FreeBSD, Mac OS X, Windows/CygWin and [Android](https://github.com/google/honggfuzz/blob/master/docs/Android.md)
-  * Supports __persistent fuzzing mode__ (long-lived process calling a fuzzed API repeatedly) with libhfuzz/libhfuzz.a. More on that can be found [here](https://github.com/google/honggfuzz/blob/master/docs/Persi
-stentFuzzing.md)
+  * Supports __persistent fuzzing mode__ (long-lived process calling a fuzzed API repeatedly) with libhfuzz/libhfuzz.a. More on that can be found [here](https://github.com/google/honggfuzz/blob/master/docs/PersistentFuzzing.md)
   * [Can fuzz remote/standalone long-lasting processes](https://github.com/google/honggfuzz/blob/master/docs/AttachingToPid.md) (e.g. network servers like __Apache's httpd__ and __ISC's bind__)
   * It comes with the __[examples](https://github.com/google/honggfuzz/tree/master/examples) directory__, consisting of real world fuzz setups for widely-used software (e.g. Apache and OpenSSL)
 
@@ -28,7 +25,6 @@ stentFuzzing.md)
 
   * A POSIX compliant operating system, [Android](https://github.com/google/honggfuzz/blob/master/docs/Android.md) or Windows (CygWin)
   * GNU/Linux with modern kernel (>= v4.2) for hardware-based code coverage guided fuzzing
-
   * A corpus of input files. Honggfuzz expects a set of files to use and modify as input to the application you're fuzzing. How you get or create these files is up to you, but you might be interested in the following sources:
     * Image formats: Tavis Ormandy's [Image Testuite](http://code.google.com/p/imagetestsuite/) has been effective at finding vulnerabilities in various graphics libraries.
     * PDF: Adobe provides some [test PDF files](http://acroeng.adobe.com/).
@@ -52,8 +48,7 @@ It should work under the following operating systems:
 
 # USAGE #
 
-```
-Usage: ./honggfuzz [options] -- path_to_command [args]
+```shell
 Usage: ./honggfuzz [options] -- path_to_command [args]
 Options:
  --help|-h 
@@ -76,8 +71,8 @@ Options:
 	Number of concurrent fuzzing threads (default: number of CPUs / 2)
  --stdin_input|-s 
 	Provide fuzzing input on STDIN, instead of ___FILE___
- --mutation_rate|-r VALUE
-	Maximal mutation rate in relation to the file size, (default: '0.001')
+ --mutations_per_run|-r VALUE
+	Maximal number of mutations per one run (default: '6')
  --logfile|-l VALUE
 	Log file
  --verbose|-v 
@@ -105,7 +100,11 @@ Options:
  --iterations|-N VALUE
 	Number of fuzzing iterations (default: '0' [no limit])
  --rlimit_as VALUE
-	Per process memory limit in MiB (default: '0' [no limit])
+	Per process RLIMIT_AS in MiB (default: '0' [no limit])
+ --rlimit_rss VALUE
+	Per process RLIMIT_RSS in MiB (default: '0' [no limit])
+ --rlimit_data VALUE
+	Per process RLIMIT_DATA in MiB (default: '0' [no limit])
  --report|-R VALUE
 	Write report to this file (default: 'HONGGFUZZ.REPORT.TXT')
  --max_file_size|-F VALUE
@@ -158,26 +157,26 @@ Options:
 	Use Linux IPC namespace isolation
 
 Examples:
- Run the binary over a mutated file chosen from the directory
-  honggfuzz -f input_dir -- /usr/bin/tiffinfo -D ___FILE___
+ Run the binary over a mutated file chosen from the directory. Disable fuzzing feedback (dry/static mode)
+  honggfuzz -f input_dir -x -- /usr/bin/djpeg ___FILE___
  As above, provide input over STDIN:
-  honggfuzz -f input_dir -s -- /usr/bin/djpeg
- Use SANCOV to maximize code coverage:
-  honggfuzz -f input_dir -C -- /usr/bin/tiffinfo -D ___FILE___
+  honggfuzz -f input_dir -x -s -- /usr/bin/djpeg
  Use compile-time instrumentation (libhfuzz/instrument.c):
-  honggfuzz -f input_dir -- /usr/bin/tiffinfo -D ___FILE___
- Use persistent mode (libhfuzz/persistent.c):
-  honggfuzz -f input_dir -P -- /usr/bin/tiffinfo_persistent
- Use persistent mode (libhfuzz/persistent.c) and compile-time instrumentation (libhfuzz/instrument.c):
-  honggfuzz -f input_dir -P -- /usr/bin/tiffinfo_persistent
- Run the binary over a dynamic file, maximize total no. of instructions:
-  honggfuzz --linux_perf_instr -- /usr/bin/tiffinfo -D ___FILE___
- Run the binary over a dynamic file, maximize total no. of branches:
-  honggfuzz --linux_perf_branch -- /usr/bin/tiffinfo -D ___FILE___
- Run the binary over a dynamic file, maximize unique branches (edges) via BTS:
-  honggfuzz --linux_perf_bts_edge -- /usr/bin/tiffinfo -D ___FILE___
- Run the binary over a dynamic file, maximize unique code blocks via Intel Processor Trace (requires libipt.so):
-  honggfuzz --linux_perf_ipt_block -- /usr/bin/tiffinfo -D ___FILE___
+  honggfuzz -f input_dir -- /usr/bin/djpeg ___FILE___
+ Use SANCOV instrumentation:
+  honggfuzz -f input_dir -C -- /usr/bin/djpeg ___FILE___
+ Use persistent mode (libhfuzz/persistent.c) w/o instrumentation:
+  honggfuzz -f input_dir -P -x -- /usr/bin/djpeg_persistent_mode
+ Use persistent mode (libhfuzz/persistent.c) and compile-time instrumentation:
+  honggfuzz -f input_dir -P -- /usr/bin/djpeg_persistent_mode
+ Run the binary with dynamically generate inputs, maximize total no. of instructions:
+  honggfuzz --linux_perf_instr -- /usr/bin/djpeg ___FILE___
+ As above, maximize total no. of branches:
+  honggfuzz --linux_perf_branch -- /usr/bin/djpeg ___FILE___
+ As above, maximize unique branches (edges) via Intel BTS:
+  honggfuzz --linux_perf_bts_edge -- /usr/bin/djpeg ___FILE___
+ As above, maximize unique code blocks via Intel Processor Trace (requires libipt.so):
+  honggfuzz --linux_perf_ipt_block -- /usr/bin/djpeg ___FILE___
 ```
 
 # OUTPUT FILES #
@@ -198,7 +197,7 @@ Examples:
 # FAQ #
 
   * Q: **Why the name _honggfuzz_**?
-  * A: The term honggfuzz was coined during a major and memorable event in the city of [Zurich](http://en.wikipedia.org/wiki/H%C3%B6ngg), where a Welsh security celebrity tried to reach Höngg in a cab while singing _Another one bites the dust_.
+  * A: The term honggfuzz was coined during a major and memorable event in the city of [Zurich](http://en.wikipedia.org/wiki/H%C3%B6ngg), where a Welsh security celebrity tried to reach Höngg in a cab while singing _[Another one bites the dust](https://en.wikipedia.org/wiki/Another_One_Bites_the_Dust)_.
 
   * Q: **Why do you prefer the ptrace() API to the POSIX signal interface**?
   * A: The ptrace() API is more flexible when it comes to analyzing a process' crash. wait3/4() syscalls are only able to determine the type of signal which crashed an application and limited resource usage information (see _man wait4_).

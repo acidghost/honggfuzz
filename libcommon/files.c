@@ -44,135 +44,124 @@
 #include "log.h"
 #include "util.h"
 
-ssize_t files_readFileToBufMax(char* fileName, uint8_t* buf, size_t fileMaxSz)
-{
+ssize_t files_readFileToBufMax(char* fileName, uint8_t* buf, size_t fileMaxSz) {
     int fd = open(fileName, O_RDONLY | O_CLOEXEC);
     if (fd == -1) {
         PLOG_W("Couldn't open '%s' for R/O", fileName);
         return -1;
     }
-    defer { close(fd); };
 
     ssize_t readSz = files_readFromFd(fd, buf, fileMaxSz);
     if (readSz < 0) {
         LOG_W("Couldn't read '%s' to a buf", fileName);
-        return -1;
     }
+    close(fd);
 
     LOG_D("Read '%zu' bytes from '%s'", readSz, fileName);
     return readSz;
 }
 
-bool files_writeBufToFile(const char* fileName, const uint8_t* buf, size_t fileSz, int flags)
-{
+bool files_writeBufToFile(const char* fileName, const uint8_t* buf, size_t fileSz, int flags) {
     int fd = open(fileName, flags, 0644);
     if (fd == -1) {
         PLOG_W("Couldn't open '%s' for R/W", fileName);
         return false;
     }
-    defer { close(fd); };
 
-    if (files_writeToFd(fd, buf, fileSz) == false) {
+    bool ret = files_writeToFd(fd, buf, fileSz);
+    if (ret == false) {
         PLOG_W("Couldn't write '%zu' bytes to file '%s' (fd='%d')", fileSz, fileName, fd);
         unlink(fileName);
-        return false;
+    } else {
+        LOG_D("Written '%zu' bytes to '%s'", fileSz, fileName);
     }
 
-    LOG_D("Written '%zu' bytes to '%s'", fileSz, fileName);
-    return true;
+    close(fd);
+    return ret;
 }
 
-bool files_writeToFd(int fd, const uint8_t* buf, size_t fileSz)
-{
+bool files_writeToFd(int fd, const uint8_t* buf, size_t fileSz) {
     size_t writtenSz = 0;
     while (writtenSz < fileSz) {
         ssize_t sz = write(fd, &buf[writtenSz], fileSz - writtenSz);
-        if (sz < 0 && errno == EINTR)
-            continue;
+        if (sz < 0 && errno == EINTR) continue;
 
-        if (sz < 0)
-            return false;
+        if (sz < 0) return false;
 
         writtenSz += sz;
     }
     return true;
 }
 
-bool files_writeStrToFd(int fd, const char* str)
-{
+bool files_writeStrToFd(int fd, const char* str) {
     return files_writeToFd(fd, (const uint8_t*)str, strlen(str));
 }
 
-ssize_t files_readFromFd(int fd, uint8_t* buf, size_t fileSz)
-{
+ssize_t files_readFromFd(int fd, uint8_t* buf, size_t fileSz) {
     size_t readSz = 0;
     while (readSz < fileSz) {
         ssize_t sz = read(fd, &buf[readSz], fileSz - readSz);
-        if (sz < 0 && errno == EINTR)
-            continue;
+        if (sz < 0 && errno == EINTR) continue;
 
-        if (sz == 0)
-            break;
+        if (sz == 0) break;
 
-        if (sz < 0)
-            return -1;
+        if (sz < 0) return -1;
 
         readSz += sz;
     }
     return (ssize_t)readSz;
 }
 
-bool files_exists(char* fileName) { return (access(fileName, F_OK) != -1); }
+bool files_exists(const char* fileName) { return (access(fileName, F_OK) != -1); }
 
-bool files_writePatternToFd(int fd, off_t size, unsigned char p)
-{
+bool files_writePatternToFd(int fd, off_t size, unsigned char p) {
     void* buf = malloc(size);
     if (!buf) {
         PLOG_W("Couldn't allocate memory");
         return false;
     }
-    defer { free(buf); };
 
     memset(buf, p, (size_t)size);
     int ret = files_writeToFd(fd, buf, size);
+    free(buf);
 
     return ret;
 }
 
-bool files_sendToSocketNB(int fd, const uint8_t* buf, size_t fileSz)
-{
+bool files_sendToSocketNB(int fd, const uint8_t* buf, size_t fileSz) {
     size_t writtenSz = 0;
     while (writtenSz < fileSz) {
         ssize_t sz = send(fd, &buf[writtenSz], fileSz - writtenSz, MSG_DONTWAIT);
-        if (sz < 0 && errno == EINTR)
-            continue;
+        if (sz < 0 && errno == EINTR) continue;
 
-        if (sz < 0)
-            return false;
+        if (sz < 0) return false;
 
         writtenSz += sz;
     }
     return true;
 }
 
-bool files_sendToSocket(int fd, const uint8_t* buf, size_t fileSz)
-{
+bool files_sendToSocket(int fd, const uint8_t* buf, size_t fileSz) {
+    int sendFlags = 0;
+#ifdef _HF_ARCH_DARWIN
+    sendFlags |= SO_NOSIGPIPE;
+#else
+    sendFlags |= MSG_NOSIGNAL;
+#endif
+
     size_t writtenSz = 0;
     while (writtenSz < fileSz) {
-        ssize_t sz = send(fd, &buf[writtenSz], fileSz - writtenSz, MSG_NOSIGNAL);
-        if (sz < 0 && errno == EINTR)
-            continue;
+        ssize_t sz = send(fd, &buf[writtenSz], fileSz - writtenSz, sendFlags);
+        if (sz < 0 && errno == EINTR) continue;
 
-        if (sz < 0)
-            return false;
+        if (sz < 0) return false;
 
         writtenSz += sz;
     }
     return true;
 }
 
-const char* files_basename(char* path)
-{
+const char* files_basename(const char* path) {
     const char* base = strrchr(path, '/');
     return base ? base + 1 : path;
 }
@@ -181,8 +170,7 @@ const char* files_basename(char* path)
  * dstExists argument can be used by caller for cases where existing destination
  * file requires special handling (e.g. save unique crashes)
  */
-bool files_copyFile(const char* source, const char* destination, bool* dstExists, bool try_link)
-{
+bool files_copyFile(const char* source, const char* destination, bool* dstExists, bool try_link) {
     if (dstExists) {
         *dstExists = false;
     }
@@ -193,8 +181,7 @@ bool files_copyFile(const char* source, const char* destination, bool* dstExists
         } else {
             if (errno == EEXIST) {
                 // Should kick-in before MAC, so avoid the hassle
-                if (dstExists)
-                    *dstExists = true;
+                if (dstExists) *dstExists = true;
                 return false;
             } else {
                 PLOG_D("Couldn't link '%s' as '%s'", source, destination);
@@ -218,35 +205,39 @@ bool files_copyFile(const char* source, const char* destination, bool* dstExists
         PLOG_D("Couldn't open '%s' source", source);
         return false;
     }
-    defer { close(inFD); };
 
     struct stat inSt;
     if (fstat(inFD, &inSt) == -1) {
         PLOG_W("Couldn't fstat(fd='%d' fileName='%s')", inFD, source);
+        close(inFD);
         return false;
     }
 
     outFD = open(destination, dstOpenFlags, dstFilePerms);
     if (outFD == -1) {
         if (errno == EEXIST) {
-            if (dstExists)
-                *dstExists = true;
+            if (dstExists) *dstExists = true;
         }
         PLOG_D("Couldn't open '%s' destination", destination);
+        close(inFD);
         return false;
     }
-    defer { close(outFD); };
+    close(outFD);
 
     uint8_t* inFileBuf = malloc(inSt.st_size);
     if (!inFileBuf) {
         PLOG_W("malloc(%zu) failed", (size_t)inSt.st_size);
+        close(inFD);
+        close(outFD);
         return false;
     }
-    defer { free(inFileBuf); };
 
     ssize_t readSz = files_readFromFd(inFD, inFileBuf, (size_t)inSt.st_size);
     if (readSz < 0) {
         PLOG_W("Couldn't read '%s' to a buf", source);
+        free(inFileBuf);
+        close(inFD);
+        close(outFD);
         return false;
     }
 
@@ -254,9 +245,15 @@ bool files_copyFile(const char* source, const char* destination, bool* dstExists
         PLOG_W("Couldn't write '%zu' bytes to file '%s' (fd='%d')", (size_t)readSz, destination,
             outFD);
         unlink(destination);
+        free(inFileBuf);
+        close(inFD);
+        close(outFD);
         return false;
     }
 
+    free(inFileBuf);
+    close(inFD);
+    close(outFD);
     return true;
 }
 
@@ -266,18 +263,14 @@ bool files_copyFile(const char* source, const char* destination, bool* dstExists
  *
  * Simple wildcard strings are also supported (e.g. mem*)
  */
-size_t files_parseSymbolFilter(const char* srcFile, char*** filterList)
-{
+size_t files_parseSymbolFilter(const char* srcFile, char*** filterList) {
     FILE* f = fopen(srcFile, "rb");
     if (f == NULL) {
         PLOG_W("Couldn't open '%s' - R/O mode", srcFile);
         return 0;
     }
-    defer { fclose(f); };
 
     char* lineptr = NULL;
-    defer { free(lineptr); };
-
     size_t symbolsRead = 0, n = 0;
     for (;;) {
         if (getline(&lineptr, &n, f) == -1) {
@@ -286,30 +279,32 @@ size_t files_parseSymbolFilter(const char* srcFile, char*** filterList)
 
         if (strlen(lineptr) < 3) {
             LOG_F("Input symbol '%s' too short (strlen < 3)", lineptr);
-            return 0;
+            symbolsRead = 0;
+            break;
         }
-
-        if ((*filterList
-                = (char**)util_Realloc(*filterList, (symbolsRead + 1) * sizeof((*filterList)[0])))
-            == NULL) {
+        if ((*filterList = (char**)util_Realloc(
+                 *filterList, (symbolsRead + 1) * sizeof((*filterList)[0]))) == NULL) {
             PLOG_W("realloc failed (sz=%zu)", (symbolsRead + 1) * sizeof((*filterList)[0]));
-            return 0;
+            symbolsRead = 0;
+            break;
         }
         (*filterList)[symbolsRead] = malloc(strlen(lineptr));
         if (!(*filterList)[symbolsRead]) {
             PLOG_E("malloc(%zu) failed", strlen(lineptr));
-            return 0;
+            symbolsRead = 0;
+            break;
         }
         strncpy((*filterList)[symbolsRead], lineptr, strlen(lineptr));
         symbolsRead++;
     }
 
     LOG_I("%zu filter symbols added to list", symbolsRead);
+    fclose(f);
+    free(lineptr);
     return symbolsRead;
 }
 
-uint8_t* files_mapFile(char* fileName, off_t* fileSz, int* fd, bool isWritable)
-{
+uint8_t* files_mapFile(const char* fileName, off_t* fileSz, int* fd, bool isWritable) {
     int mmapProt = PROT_READ;
     if (isWritable) {
         mmapProt |= PROT_WRITE;
@@ -338,8 +333,7 @@ uint8_t* files_mapFile(char* fileName, off_t* fileSz, int* fd, bool isWritable)
     return buf;
 }
 
-uint8_t* files_mapFileShared(char* fileName, off_t* fileSz, int* fd)
-{
+uint8_t* files_mapFileShared(const char* fileName, off_t* fileSz, int* fd) {
     if ((*fd = open(fileName, O_RDONLY)) == -1) {
         PLOG_W("Couldn't open() '%s' file in R/O mode", fileName);
         return NULL;
@@ -363,11 +357,10 @@ uint8_t* files_mapFileShared(char* fileName, off_t* fileSz, int* fd)
     return buf;
 }
 
-void* files_mapSharedMem(size_t sz, int* fd, const char* dir)
-{
+void* files_mapSharedMem(size_t sz, int* fd, const char* dir) {
     *fd = -1;
 #if defined(_HF_ARCH_LINUX) && defined(__NR_memfd_create)
-#if !defined(MFD_CLOEXEC) /* It's not defined as we didn't include sys/memfd.h, but it's           \
+#if !defined(MFD_CLOEXEC) /* It's not defined as we didn't include sys/memfd.h, but it's \
                              present with some Linux distros only */
 #define MFD_CLOEXEC 0x0001U
 #endif /* !defined(MFD_CLOEXEC) */
@@ -398,26 +391,28 @@ void* files_mapSharedMem(size_t sz, int* fd, const char* dir)
     return ret;
 }
 
-bool files_readPidFromFile(const char* fileName, pid_t* pidPtr)
-{
+bool files_readPidFromFile(const char* fileName, pid_t* pidPtr) {
     FILE* fPID = fopen(fileName, "rbe");
     if (fPID == NULL) {
         PLOG_W("Couldn't open '%s' - R/O mode", fileName);
         return false;
     }
-    defer { fclose(fPID); };
 
     char* lineptr = NULL;
     size_t lineSz = 0;
-    defer { free(lineptr); };
-    if (getline(&lineptr, &lineSz, fPID) == -1) {
+    ssize_t ret = getline(&lineptr, &lineSz, fPID);
+    fclose(fPID);
+    if (ret == -1) {
         if (lineSz == 0) {
             LOG_W("Empty PID file (%s)", fileName);
+            fclose(fPID);
+            free(lineptr);
             return false;
         }
     }
 
     *pidPtr = atoi(lineptr);
+    free(lineptr);
     if (*pidPtr < 1) {
         LOG_W("Invalid PID read from '%s' file", fileName);
         return false;

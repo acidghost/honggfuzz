@@ -8,11 +8,13 @@ SAN="$2"
 TYPE=`basename "$DIR"`
 HFUZZ_SRC=~/src/honggfuzz/
 OS=`uname -s`
+CLANG_VER=-5.0
 CC="$HFUZZ_SRC/hfuzz_cc/hfuzz-clang"
 CXX="$HFUZZ_SRC/hfuzz_cc/hfuzz-clang++"
 COMMON_FLAGS="-DBORINGSSL_UNSAFE_DETERMINISTIC_MODE -DBORINGSSL_UNSAFE_FUZZER_MODE -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION -DBN_DEBUG \
-	-O3 -g -DFuzzerInitialize=LLVMFuzzerInitialize -DFuzzerTestOneInput=LLVMFuzzerTestOneInput -lpthread -lz -Wl,-z,now \
-	-I./$DIR/include -I$HFUZZ_SRC/examples/openssl"
+	-O3 -g -DFuzzerInitialize=LLVMFuzzerInitialize -DFuzzerTestOneInput=LLVMFuzzerTestOneInput \
+	-I./$DIR/include -I$HFUZZ_SRC/examples/openssl -I$HFUZZ_SRC"
+COMMON_LDFLAGS="-lpthread -lz -Wl,-z,now"
 
 if [ -z "$DIR" ]; then
 	echo "$0" DIR SANITIZE
@@ -33,7 +35,7 @@ fi
 
 
 if [ "$OS" = "Linux" ]; then
-	COMMON_FLAGS="$COMMON_FLAGS -ldl"
+	COMMON_LDFLAGS="$COMMON_LDFLAGS -ldl"
 fi
 
 if [ -n "$SAN" ]; then
@@ -42,5 +44,14 @@ if [ -n "$SAN" ]; then
 fi
 
 for x in x509 privkey client server; do
-	$CC $COMMON_FLAGS -g "$HFUZZ_SRC/examples/openssl/$x.c" -o "$TYPE$SAN.$x" "$LIBSSL" "$LIBCRYPTO" $SAN_COMPILE
+	$CC $COMMON_FLAGS -g "$HFUZZ_SRC/examples/openssl/$x.c" -o "$TYPE$SAN.$x$SUFFIX" "$LIBSSL" "$LIBCRYPTO" $COMMON_LDFLAGS $SAN_COMPILE
 done
+
+for x in x509 privkey client server; do
+	$CC $COMMON_FLAGS -DHF_SSL_FROM_STDIN -g "$HFUZZ_SRC/examples/openssl/$x.c" -o "stdin.$TYPE$SAN.$x" "$LIBSSL" "$LIBCRYPTO" $COMMON_LDFLAGS $SAN_COMPILE
+done
+
+for x in x509 privkey client server; do
+	clang++$CLANG_VER $COMMON_FLAGS -g "$HFUZZ_SRC/examples/openssl/$x.c" -o "libfuzzer.$TYPE$SAN.$x$SUFFIX" "$LIBSSL" "$LIBCRYPTO" $COMMON_LDFLAGS $SAN_COMPILE -lFuzzer
+done
+

@@ -40,6 +40,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "fuzz.h"
 #include "libcommon/common.h"
 #include "libcommon/files.h"
 #include "libcommon/log.h"
@@ -79,8 +80,7 @@ struct {
  * Returns true if a process exited (so, presumably, we can delete an input
  * file)
  */
-static bool arch_analyzeSignal(honggfuzz_t* hfuzz, int status, fuzzer_t* fuzzer)
-{
+static bool arch_analyzeSignal(run_t* run, int status) {
     /*
      * Resumed by delivery of SIGCONT
      */
@@ -89,14 +89,14 @@ static bool arch_analyzeSignal(honggfuzz_t* hfuzz, int status, fuzzer_t* fuzzer)
     }
 
     if (WIFEXITED(status) || WIFSIGNALED(status)) {
-        sancov_Analyze(hfuzz, fuzzer);
+        sancov_Analyze(run);
     }
 
     /*
      * Boring, the process just exited
      */
     if (WIFEXITED(status)) {
-        LOG_D("Process (pid %d) exited normally with status %d", fuzzer->pid, WEXITSTATUS(status));
+        LOG_D("Process (pid %d) exited normally with status %d", run->pid, WEXITSTATUS(status));
         return true;
     }
 
@@ -105,12 +105,12 @@ static bool arch_analyzeSignal(honggfuzz_t* hfuzz, int status, fuzzer_t* fuzzer)
      */
     if (!WIFSIGNALED(status)) {
         LOG_E("Process (pid %d) exited with the following status %d, please report that as a bug",
-            fuzzer->pid, status);
+            run->pid, status);
         return true;
     }
 
     int termsig = WTERMSIG(status);
-    LOG_D("Process (pid %d) killed by signal %d '%s'", fuzzer->pid, termsig, strsignal(termsig));
+    LOG_D("Process (pid %d) killed by signal %d '%s'", run->pid, termsig, strsignal(termsig));
     if (!arch_sigs[termsig].important) {
         LOG_D("It's not that important signal, skipping");
         return true;
@@ -122,137 +122,135 @@ static bool arch_analyzeSignal(honggfuzz_t* hfuzz, int status, fuzzer_t* fuzzer)
     char newname[PATH_MAX];
 
     /* If dry run mode, copy file with same name into workspace */
-    if (hfuzz->origFlipRate == 0.0L && hfuzz->useVerifier) {
-        snprintf(newname, sizeof(newname), "%s", fuzzer->origFileName);
+    if (run->global->mutationsPerRun == 0U && run->global->useVerifier) {
+        snprintf(newname, sizeof(newname), "%s", run->origFileName);
     } else {
-        snprintf(newname, sizeof(newname), "%s/%s.PID.%d.TIME.%s.%s", hfuzz->workDir,
-            arch_sigs[termsig].descr, fuzzer->pid, localtmstr, hfuzz->fileExtn);
+        snprintf(newname, sizeof(newname), "%s/%s.PID.%d.TIME.%s.%s", run->global->io.crashDir,
+            arch_sigs[termsig].descr, run->pid, localtmstr, run->global->io.fileExtn);
     }
 
-    LOG_I("Ok, that's interesting, saving the '%s' as '%s'", fuzzer->fileName, newname);
+    LOG_I("Ok, that's interesting, saving the '%s' as '%s'", run->fileName, newname);
 
     /*
      * All crashes are marked as unique due to lack of information in POSIX arch
      */
-    ATOMIC_POST_INC(hfuzz->crashesCnt);
-    ATOMIC_POST_INC(hfuzz->uniqueCrashesCnt);
+    ATOMIC_POST_INC(run->global->cnts.crashesCnt);
+    ATOMIC_POST_INC(run->global->cnts.uniqueCrashesCnt);
 
     if (files_writeBufToFile(
-            newname, fuzzer->dynamicFile, fuzzer->dynamicFileSz, O_CREAT | O_EXCL | O_WRONLY)
-        == false) {
-        LOG_E("Couldn't copy '%s' to '%s'", fuzzer->fileName, fuzzer->crashFileName);
+            newname, run->dynamicFile, run->dynamicFileSz, O_CREAT | O_EXCL | O_WRONLY) == false) {
+        LOG_E("Couldn't copy '%s' to '%s'", run->fileName, run->crashFileName);
     }
 
     return true;
 }
 
-pid_t arch_fork(honggfuzz_t* hfuzz UNUSED, fuzzer_t* fuzzer UNUSED) { return fork(); }
+pid_t arch_fork(run_t* fuzzer UNUSED) { return fork(); }
 
-bool arch_launchChild(honggfuzz_t* hfuzz, char* fileName)
-{
+bool arch_launchChild(run_t* run) {
 #define ARGS_MAX 512
-    char* args[ARGS_MAX + 2];
-    char argData[PATH_MAX] = { 0 };
+    const char* args[ARGS_MAX + 2];
+    char argData[PATH_MAX] = {0};
     int x;
 
-    for (x = 0; x < ARGS_MAX && hfuzz->cmdline[x]; x++) {
-        if (!hfuzz->fuzzStdin && strcmp(hfuzz->cmdline[x], _HF_FILE_PLACEHOLDER) == 0) {
-            args[x] = fileName;
-        } else if (!hfuzz->fuzzStdin && strstr(hfuzz->cmdline[x], _HF_FILE_PLACEHOLDER)) {
-            const char* off = strstr(hfuzz->cmdline[x], _HF_FILE_PLACEHOLDER);
-            snprintf(argData, PATH_MAX, "%.*s%s", (int)(off - hfuzz->cmdline[x]), hfuzz->cmdline[x],
-                fileName);
+    for (x = 0; x < ARGS_MAX && run->global->exe.cmdline[x]; x++) {
+        if (!run->global->exe.fuzzStdin &&
+            strcmp(run->global->exe.cmdline[x], _HF_FILE_PLACEHOLDER) == 0) {
+            args[x] = run->fileName;
+        } else if (!run->global->exe.fuzzStdin &&
+                   strstr(run->global->exe.cmdline[x], _HF_FILE_PLACEHOLDER)) {
+            const char* off = strstr(run->global->exe.cmdline[x], _HF_FILE_PLACEHOLDER);
+            snprintf(argData, PATH_MAX, "%.*s%s", (int)(off - run->global->exe.cmdline[x]),
+                run->global->exe.cmdline[x], run->fileName);
             args[x] = argData;
         } else {
-            args[x] = hfuzz->cmdline[x];
+            args[x] = run->global->exe.cmdline[x];
         }
     }
 
     args[x++] = NULL;
 
-    LOG_D("Launching '%s' on file '%s'", args[0], fileName);
+    LOG_D("Launching '%s' on file '%s'", args[0], run->fileName);
 
     /* alarm persists across forks, so disable it here */
     alarm(0);
-    execvp(args[0], args);
+    execvp(args[0], (char* const*)args);
     alarm(1);
 
     return false;
 }
 
-void arch_prepareParent(honggfuzz_t* hfuzz UNUSED, fuzzer_t* fuzzer UNUSED) {}
+void arch_prepareParent(run_t* fuzzer UNUSED) {}
 
-void arch_prepareParentAfterFork(honggfuzz_t* hfuzz UNUSED, fuzzer_t* fuzzer UNUSED) {}
+void arch_prepareParentAfterFork(run_t* fuzzer UNUSED) {}
 
-void arch_reapChild(honggfuzz_t* hfuzz, fuzzer_t* fuzzer)
-{
+void arch_reapChild(run_t* run) {
     for (;;) {
-        if (hfuzz->persistent) {
+        if (run->global->persistent) {
             struct pollfd pfd = {
-                .fd = fuzzer->persistentSock,
+                .fd = run->persistentSock,
                 .events = POLLIN,
             };
             int r = poll(&pfd, 1, 250 /* 0.25s */);
             if (r == 0 || (r == -1 && errno == EINTR)) {
-                subproc_checkTimeLimit(hfuzz, fuzzer);
-                subproc_checkTermination(hfuzz, fuzzer);
+                subproc_checkTimeLimit(run);
+                subproc_checkTermination(run);
             }
             if (r == -1 && errno != EINTR) {
-                PLOG_F("poll(fd=%d)", fuzzer->persistentSock);
+                PLOG_F("poll(fd=%d)", run->persistentSock);
             }
         }
-        if (subproc_persistentModeRoundDone(hfuzz, fuzzer) == true) {
+        if (subproc_persistentModeRoundDone(run) == true) {
             break;
         }
 
         int status;
-        int flags = hfuzz->persistent ? WNOHANG : 0;
-        int ret = waitpid(fuzzer->pid, &status, flags);
+        int flags = run->global->persistent ? WNOHANG : 0;
+        int ret = waitpid(run->pid, &status, flags);
         if (ret == 0) {
             continue;
         }
         if (ret == -1 && errno == EINTR) {
-            subproc_checkTimeLimit(hfuzz, fuzzer);
+            subproc_checkTimeLimit(run);
             continue;
         }
         if (ret == -1) {
-            PLOG_W("waitpid(pid=%d)", fuzzer->pid);
+            PLOG_W("waitpid(pid=%d)", run->pid);
             continue;
         }
-        if (ret != fuzzer->pid) {
+        if (ret != run->pid) {
             continue;
         }
 
         char strStatus[4096];
-        if (hfuzz->persistent && ret == fuzzer->persistentPid
-            && (WIFEXITED(status) || WIFSIGNALED(status))) {
-            fuzzer->persistentPid = 0;
-            if (ATOMIC_GET(hfuzz->terminating) == false) {
+        if (run->global->persistent && ret == run->persistentPid &&
+            (WIFEXITED(status) || WIFSIGNALED(status))) {
+            run->persistentPid = 0;
+            if (fuzz_isTerminating() == false) {
                 LOG_W("Persistent mode: PID %d exited with status: %s", ret,
                     subproc_StatusToStr(status, strStatus, sizeof(strStatus)));
             }
         }
 
-        LOG_D("Process (pid %d) came back with status: %s", fuzzer->pid,
+        LOG_D("Process (pid %d) came back with status: %s", run->pid,
             subproc_StatusToStr(status, strStatus, sizeof(strStatus)));
 
-        if (arch_analyzeSignal(hfuzz, status, fuzzer)) {
+        if (arch_analyzeSignal(run, status)) {
             break;
         }
     }
 }
 
-bool arch_archInit(honggfuzz_t* hfuzz)
-{
+bool arch_archInit(honggfuzz_t* hfuzz) {
     /* Default is true for all platforms except Android */
     arch_sigs[SIGABRT].important = hfuzz->monitorSIGABRT;
 
     /* Default is false */
-    arch_sigs[SIGVTALRM].important = hfuzz->tmout_vtalrm;
+    arch_sigs[SIGVTALRM].important = hfuzz->timing.tmoutVTALRM;
 
     return true;
 }
 
 void arch_sigFunc(int sig UNUSED) { return; }
 
-bool arch_archThreadInit(honggfuzz_t* hfuzz UNUSED, fuzzer_t* fuzzer UNUSED) { return true; }
+bool arch_archThreadInit(run_t* fuzzer UNUSED) { return true; }

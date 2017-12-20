@@ -50,20 +50,19 @@
 #include "libcommon/log.h"
 #include "libcommon/util.h"
 
-static bool input_getDirStatsAndRewind(honggfuzz_t* hfuzz)
-{
-    rewinddir(hfuzz->inputDirP);
+static bool input_getDirStatsAndRewind(honggfuzz_t* hfuzz) {
+    rewinddir(hfuzz->io.inputDirPtr);
 
     size_t maxSize = 0U;
     size_t fileCnt = 0U;
     for (;;) {
         errno = 0;
-        struct dirent* entry = readdir(hfuzz->inputDirP);
+        struct dirent* entry = readdir(hfuzz->io.inputDirPtr);
         if (entry == NULL && errno == EINTR) {
             continue;
         }
         if (entry == NULL && errno != 0) {
-            PLOG_W("readdir('%s')", hfuzz->inputDir);
+            PLOG_W("readdir('%s')", hfuzz->io.inputDir);
             return false;
         }
         if (entry == NULL) {
@@ -71,7 +70,7 @@ static bool input_getDirStatsAndRewind(honggfuzz_t* hfuzz)
         }
 
         char fname[PATH_MAX];
-        snprintf(fname, sizeof(fname), "%s/%s", hfuzz->inputDir, entry->d_name);
+        snprintf(fname, sizeof(fname), "%s/%s", hfuzz->io.inputDir, entry->d_name);
         LOG_D("Analyzing file '%s'", fname);
 
         struct stat st;
@@ -97,7 +96,7 @@ static bool input_getDirStatsAndRewind(honggfuzz_t* hfuzz)
         fileCnt++;
     }
 
-    ATOMIC_SET(hfuzz->fileCnt, fileCnt);
+    ATOMIC_SET(hfuzz->io.fileCnt, fileCnt);
     if (hfuzz->maxFileSz == 0U) {
         if (maxSize < 8192) {
             hfuzz->maxFileSz = 8192;
@@ -110,50 +109,49 @@ static bool input_getDirStatsAndRewind(honggfuzz_t* hfuzz)
         hfuzz->maxFileSz = 1024U * 128;
     }
 
-    if (hfuzz->fileCnt == 0U) {
-        LOG_W("No usable files in the input directory '%s'", hfuzz->inputDir);
+    if (hfuzz->io.fileCnt == 0U) {
+        LOG_W("No usable files in the input directory '%s'", hfuzz->io.inputDir);
         return false;
     }
 
-    LOG_D("Re-read the '%s', maxFileSz:%zu, number of usable files:%zu", hfuzz->inputDir,
-        hfuzz->maxFileSz, hfuzz->fileCnt);
+    LOG_D("Re-read the '%s', maxFileSz:%zu, number of usable files:%zu", hfuzz->io.inputDir,
+        hfuzz->maxFileSz, hfuzz->io.fileCnt);
 
-    rewinddir(hfuzz->inputDirP);
+    rewinddir(hfuzz->io.inputDirPtr);
 
     return true;
 }
 
-bool input_getNext(honggfuzz_t* hfuzz, char* fname, bool rewind)
-{
+bool input_getNext(run_t* run, char* fname, bool rewind) {
     static pthread_mutex_t input_mutex = PTHREAD_MUTEX_INITIALIZER;
     MX_SCOPED_LOCK(&input_mutex);
 
-    if (hfuzz->fileCnt == 0U) {
+    if (run->global->io.fileCnt == 0U) {
         return false;
     }
 
     for (;;) {
         errno = 0;
-        struct dirent* entry = readdir(hfuzz->inputDirP);
+        struct dirent* entry = readdir(run->global->io.inputDirPtr);
         if (entry == NULL && errno == EINTR) {
             continue;
         }
         if (entry == NULL && errno != 0) {
-            PLOG_W("readdir_r('%s')", hfuzz->inputDir);
+            PLOG_W("readdir_r('%s')", run->global->io.inputDir);
             return false;
         }
         if (entry == NULL && rewind == false) {
             return false;
         }
         if (entry == NULL && rewind == true) {
-            if (input_getDirStatsAndRewind(hfuzz) == false) {
-                LOG_E("input_getDirStatsAndRewind('%s')", hfuzz->inputDir);
+            if (input_getDirStatsAndRewind(run->global) == false) {
+                LOG_E("input_getDirStatsAndRewind('%s')", run->global->io.inputDir);
                 return false;
             }
             continue;
         }
 
-        snprintf(fname, PATH_MAX, "%s/%s", hfuzz->inputDir, entry->d_name);
+        snprintf(fname, PATH_MAX, "%s/%s", run->global->io.inputDir, entry->d_name);
 
         struct stat st;
         if (stat(fname, &st) == -1) {
@@ -172,36 +170,34 @@ bool input_getNext(honggfuzz_t* hfuzz, char* fname, bool rewind)
     }
 }
 
-bool input_init(honggfuzz_t* hfuzz)
-{
-    hfuzz->fileCnt = 0U;
+bool input_init(honggfuzz_t* hfuzz) {
+    hfuzz->io.fileCnt = 0U;
 
-    if (!hfuzz->inputDir) {
+    if (!hfuzz->io.inputDir) {
         LOG_W("No input file/dir specified");
         return false;
     }
 
-    int dir_fd = open(hfuzz->inputDir, O_DIRECTORY | O_RDONLY | O_CLOEXEC);
+    int dir_fd = open(hfuzz->io.inputDir, O_DIRECTORY | O_RDONLY | O_CLOEXEC);
     if (dir_fd == -1) {
-        PLOG_W("open('%s', O_DIRECTORY|O_RDONLY|O_CLOEXEC)", hfuzz->inputDir);
+        PLOG_W("open('%s', O_DIRECTORY|O_RDONLY|O_CLOEXEC)", hfuzz->io.inputDir);
         return false;
     }
-    if ((hfuzz->inputDirP = fdopendir(dir_fd)) == NULL) {
+    if ((hfuzz->io.inputDirPtr = fdopendir(dir_fd)) == NULL) {
         close(dir_fd);
-        PLOG_W("opendir('%s')", hfuzz->inputDir);
+        PLOG_W("opendir('%s')", hfuzz->io.inputDir);
         return false;
     }
     if (input_getDirStatsAndRewind(hfuzz) == false) {
-        hfuzz->fileCnt = 0U;
-        LOG_W("input_getDirStatsAndRewind('%s')", hfuzz->inputDir);
+        hfuzz->io.fileCnt = 0U;
+        LOG_W("input_getDirStatsAndRewind('%s')", hfuzz->io.inputDir);
         return false;
     }
 
     return true;
 }
 
-bool input_parseDictionary(honggfuzz_t* hfuzz)
-{
+bool input_parseDictionary(honggfuzz_t* hfuzz) {
     FILE* fDict = fopen(hfuzz->dictionaryFile, "rb");
     if (fDict == NULL) {
         PLOG_W("Couldn't open '%s' - R/O mode", hfuzz->dictionaryFile);
@@ -230,10 +226,10 @@ bool input_parseDictionary(honggfuzz_t* hfuzz)
         if (lineptr[0] == '\0') {
             continue;
         }
-        char bufn[1025] = { 0 };
-        char bufv[1025] = { 0 };
-        if (sscanf(lineptr, "\"%1024s", bufv) != 1
-            && sscanf(lineptr, "%1024[^=]=\"%1024s", bufn, bufv) != 2) {
+        char bufn[1025] = {0};
+        char bufv[1025] = {0};
+        if (sscanf(lineptr, "\"%1024s", bufv) != 1 &&
+            sscanf(lineptr, "%1024[^=]=\"%1024s", bufn, bufv) != 2) {
             LOG_W("Incorrect dictionary entry: '%s'. Skipping", lineptr);
             continue;
         }
@@ -251,8 +247,7 @@ bool input_parseDictionary(honggfuzz_t* hfuzz)
     return true;
 }
 
-bool input_parseBlacklist(honggfuzz_t* hfuzz)
-{
+bool input_parseBlacklist(honggfuzz_t* hfuzz) {
     FILE* fBl = fopen(hfuzz->blacklistFile, "rb");
     if (fBl == NULL) {
         PLOG_W("Couldn't open '%s' - R/O mode", hfuzz->blacklistFile);
@@ -269,9 +264,8 @@ bool input_parseBlacklist(honggfuzz_t* hfuzz)
             break;
         }
 
-        if ((hfuzz->blacklist = util_Realloc(
-                 hfuzz->blacklist, (hfuzz->blacklistCnt + 1) * sizeof(hfuzz->blacklist[0])))
-            == NULL) {
+        if ((hfuzz->blacklist = util_Realloc(hfuzz->blacklist,
+                 (hfuzz->blacklistCnt + 1) * sizeof(hfuzz->blacklist[0]))) == NULL) {
             PLOG_W(
                 "realloc failed (sz=%zu)", (hfuzz->blacklistCnt + 1) * sizeof(hfuzz->blacklist[0]));
             return false;
@@ -283,8 +277,9 @@ bool input_parseBlacklist(honggfuzz_t* hfuzz)
         // Verify entries are sorted so we can use interpolation search
         if (hfuzz->blacklistCnt > 1) {
             if (hfuzz->blacklist[hfuzz->blacklistCnt - 1] > hfuzz->blacklist[hfuzz->blacklistCnt]) {
-                LOG_F("Blacklist file not sorted. Use 'tools/createStackBlacklist.sh' to sort "
-                      "records");
+                LOG_F(
+                    "Blacklist file not sorted. Use 'tools/createStackBlacklist.sh' to sort "
+                    "records");
                 return false;
             }
         }
